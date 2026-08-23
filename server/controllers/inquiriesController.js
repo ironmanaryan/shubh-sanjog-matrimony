@@ -102,11 +102,11 @@ async function updateInquiryStatus(req, res) {
 
     const note = adminNote === undefined ? undefined : sanitize(adminNote, 2000) || null;
 
-    if (db._db) {
+    if (db.isReady()) {
       await db.setInquiryStatusDb(db._db, id, nextStatus, note);
-      const rows = await db._db.all(`SELECT * FROM inquiries WHERE id = ?`, [id]);
-      if (!rows || rows.length === 0) return res.status(404).json({ ok: false, error: 'Inquiry not found' });
-      return res.json({ ok: true, inquiry: db.mapInquiryRow ? db.mapInquiryRow(rows[0]) : rows[0] });
+      const inquiry = await db.getInquiryByIdDb(db._db, id);
+      if (!inquiry) return res.status(404).json({ ok: false, error: 'Inquiry not found' });
+      return res.json({ ok: true, inquiry });
     }
 
     const inquiry = memoryInquiries.find((i) => i.id === id);

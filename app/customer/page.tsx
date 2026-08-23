@@ -1,17 +1,14 @@
 ﻿'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { useEffect, useMemo, useState } from 'react';
-import { Bell, BriefcaseBusiness, CheckCheck, ChevronRight, CreditCard, FileText, Heart, Home, MessageSquare, ShieldCheck, Sparkles, UserRound, Wallet } from 'lucide-react';
+import { Bell, BriefcaseBusiness, CheckCheck, ChevronRight, Circle, CircleCheckBig, CreditCard, FileText, Heart, Home, MessageSquare, ShieldCheck, Sparkles, UserRound, Wallet } from 'lucide-react';
 import PrivacySettings from '../../components/customer/PrivacySettings';
-import { fetchJsonWithFallback, requestJson } from '@/lib/api-client';
-import {
-  MOCK_APPOINTMENTS_RESPONSE,
-  MOCK_DOCUMENTS_RESPONSE,
-  MOCK_NOTIFICATIONS_RESPONSE,
-  MOCK_PROFILE_RESPONSE,
-  MOCK_STATS_RESPONSE,
-} from '@/lib/mock-data';
+import RequestMeetingButton from '@/components/customer/RequestMeetingButton';
+import { compatibilityBadgeClass } from '@/lib/compatibility';
+import { buildMeetingRequestMessage } from '@/lib/whatsapp';
+import { API, requestJson } from '@/lib/api-client';
 
 // Customer panel sections from the reference scope document
 const navItems = [
@@ -26,8 +23,8 @@ const navItems = [
   { label: 'Payments', icon: CreditCard, href: '/customer/membership' },
   { label: 'Appointments', icon: BriefcaseBusiness, href: '/customer/appointments' },
   { label: 'Notifications', icon: Bell, href: '#notifications' },
-  { label: 'Profile Activity', icon: MessageSquare, href: '#activity' },
-  { label: 'Account Settings', icon: ShieldCheck, href: '#settings' },
+  { label: 'Profile Activity', icon: MessageSquare, href: '/customer/activity' },
+  { label: 'Account Settings', icon: ShieldCheck, href: '/customer/settings' },
 ];
 
 type PersonalInfo = {
@@ -87,6 +84,20 @@ type Appointment = { id?: string; date: string; time: string; type?: string; not
 type DocumentItem = { id: string; status?: string; documentType?: string | null; originalName?: string };
 
 type NotificationItem = { id: string; type: string; at: number; payload?: string };
+
+// Compatibility highlight card (PRD high-priority #1) — mirrors the
+// /matches/search result shape; matchScore is computed server-side against
+// the viewer's saved partner preferences.
+type MatchHighlight = {
+  id: string;
+  name: string;
+  age?: number | null;
+  city?: string;
+  profession?: string;
+  matchScore?: number;
+  matchReasons?: string;
+  verifiedBadge?: boolean;
+};
 
 type MembershipSummary = {
   tier?: string;
@@ -206,14 +217,34 @@ function CompletionRing({ value }: { value: number }) {
 }
 
 // Guarded GET that never throws — network failures ("TypeError: Failed to
-// fetch") resolve silently to realistic mock data via fetchJsonWithFallback()
-// instead of crashing or logging intrusive errors.
+// fetch") resolve to null so one failed endpoint cannot blank the dashboard.
 
 type ProfileResponse = { profile?: Partial<ProfileData> };
 type StatsResponse = { stats?: { membership?: MembershipSummary; recommendedProfiles?: unknown[]; matchesRemaining?: number } };
 type DocsResponse = { documents?: DocumentItem[] };
 type AppointmentsResponse = { appointments?: Appointment[] };
 type NotificationsResponse = { notifications?: NotificationItem[] };
+
+// PRD funnel: Registration -> OTP -> Biodata -> Family -> Preferences ->
+// Docs -> Submit -> Admin Review -> Membership. Rendered as a live tracker.
+type OnboardingStep = { key: string; label: string; done: boolean };
+type OnboardingStatus = {
+  profileStatus: string;
+  profileCompletion: number;
+  steps: OnboardingStep[];
+  nextStep: string;
+  approved: boolean;
+};
+
+async function getJson<T>(path: string, headers: Record<string, string>): Promise<T | null> {
+  try {
+    const res = await fetch(`${API}${path}`, { headers });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
 
 function calculateAge(dob?: string) {
   if (!dob) return 0;
@@ -228,6 +259,71 @@ function isPendingDoc(doc: DocumentItem) {
   return String(doc.status || 'Pending').toLowerCase().includes('pending');
 }
 
+// Where each PRD funnel step is completed in the UI.
+const STEP_HREF: Record<string, string> = {
+  registration: '/register',
+  otp: '/login',
+  biodata: '/customer/biodata',
+  family: '/customer/biodata',
+  preferences: '/customer/biodata',
+  documents: '/customer/documents',
+  submit: '/customer/biodata',
+  admin_review: '/customer',
+  membership: '/customer/membership',
+};
+
+// Step-by-step onboarding tracker (PRD §3): Registration -> OTP -> Biodata ->
+// Family Details -> Partner Preferences -> Upload Docs -> Submit -> Admin
+// Review -> Membership. Each row deep-links to the screen that completes it.
+function OnboardingChecklist({ status }: { status: OnboardingStatus }) {
+  const doneCount = status.steps.filter((s) => s.done).length;
+  const pct = Math.round((doneCount / status.steps.length) * 100);
+  return (
+    <section aria-label="Getting started" className="rounded-[28px] border border-[#f2d9a8] bg-white p-5 shadow-soft">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-xl font-black text-[#2c0d16]">Complete your journey</h2>
+        <span className="rounded-full bg-[#f9f0d0] px-3 py-1 text-xs font-bold uppercase tracking-[0.18em] text-[#7b102d]">
+          {doneCount}/{status.steps.length} done
+        </span>
+      </div>
+      <div className="mb-5 h-2 w-full overflow-hidden rounded-full bg-[#efe2d2]">
+        <div className={`h-full rounded-full transition-all duration-700 ${pct === 100 ? 'bg-[#0a7d4c]' : 'bg-[#7b102d]'}`} style={{ width: `${pct}%` }} />
+      </div>
+      <ol className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        {status.steps.map((step, index) => {
+          const href = STEP_HREF[step.key] || '#';
+          const active = !step.done && status.steps.slice(0, index).every((s) => s.done);
+          return (
+            <li key={step.key}>
+              <Link
+                href={href}
+                className={`flex items-center justify-between gap-2 rounded-2xl px-4 py-3 text-sm transition ${
+                  step.done
+                    ? 'bg-[#eaf8ef] text-[#0a7d4c]'
+                    : active
+                      ? 'bg-[#fff7ee] font-bold text-[#7b102d] ring-1 ring-[#e0bd7a]'
+                      : 'bg-[#fffaf3] text-[#6a4a57]'
+                }`}
+              >
+                <span className="flex items-center gap-2.5">
+                  {step.done ? <CircleCheckBig size={16} /> : <Circle size={16} className={active ? 'text-[#7b102d]' : 'text-[#c9b39a]'} />}
+                  {step.label}
+                </span>
+                {!step.done && <ChevronRight size={14} className={active ? 'text-[#7b102d]' : 'text-[#c9b39a]'} />}
+              </Link>
+            </li>
+          );
+        })}
+      </ol>
+      {!status.approved && status.profileStatus !== 'Draft' && (
+        <p className="mt-4 rounded-2xl bg-[#fff8ee] px-4 py-3 text-sm text-[#8a5a11]">
+          Your profile is <strong>{status.profileStatus}</strong> — our team reviews every submission, usually within 24–48 hours.
+        </p>
+      )}
+    </section>
+  );
+}
+
 function formatExpiry(expiresAt?: number | null) {
   if (!expiresAt) return '—';
   return new Date(expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -240,7 +336,10 @@ export default function CustomerDashboardPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [topMatches, setTopMatches] = useState<MatchHighlight[]>([]);
   const [statusMessage, setStatusMessage] = useState('');
+  const [loadError, setLoadError] = useState('');
+  const [onboarding, setOnboarding] = useState<OnboardingStatus | null>(null);
   const [bookingForm, setBookingForm] = useState({ date: new Date(Date.now() + 86400000).toISOString().slice(0, 10), time: '09:00 AM', type: 'Consultation', notes: '' });
   const [bookingBusy, setBookingBusy] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
@@ -259,37 +358,43 @@ export default function CustomerDashboardPage() {
       return;
     }
 
-    // Every request falls back to realistic demo data when the API is
-    // unreachable, so one failed endpoint ("TypeError: Failed to fetch") can
-    // never blank out the whole dashboard.
-    const [profileJson, statsJson, docsJson, appointmentsJson, notificationsJson] = await Promise.all([
-      fetchJsonWithFallback<ProfileResponse>('/customer/profile', { headers, mock: MOCK_PROFILE_RESPONSE }),
-      fetchJsonWithFallback<StatsResponse>('/dashboard/stats', { headers, mock: MOCK_STATS_RESPONSE }),
-      fetchJsonWithFallback<DocsResponse>('/documents', { headers, mock: MOCK_DOCUMENTS_RESPONSE }),
-      fetchJsonWithFallback<AppointmentsResponse>('/appointments/my', { headers, mock: MOCK_APPOINTMENTS_RESPONSE }),
-      fetchJsonWithFallback<NotificationsResponse>('/notifications', { headers, mock: MOCK_NOTIFICATIONS_RESPONSE }),
+    // Every request is independent: one failed endpoint can never blank out
+    // the whole dashboard. All data comes live from MongoDB via the API.
+    const [profileJson, statsJson, docsJson, appointmentsJson, notificationsJson, matchesJson, onboardingJson] = await Promise.all([
+      getJson<ProfileResponse>('/customer/profile', headers),
+      getJson<StatsResponse>('/dashboard/stats', headers),
+      getJson<DocsResponse>('/documents', headers),
+      getJson<AppointmentsResponse>('/appointments/my', headers),
+      getJson<NotificationsResponse>('/notifications', headers),
+      // PRD high-priority #1 — compatibility-scored candidates for the highlights card
+      getJson<{ profiles?: MatchHighlight[] }>('/matches/search', headers),
+      getJson<{ onboarding?: OnboardingStatus }>('/customer/onboarding-status', headers),
     ]);
 
-    if (profileJson.data.profile) {
+    if (!profileJson && !statsJson && !docsJson) {
+      setLoadError('Could not reach the server — your data could not be loaded. Please refresh in a moment.');
+    } else {
+      setLoadError('');
+    }
+
+    if (profileJson?.profile) {
       setProfile({
         ...defaultProfile,
-        ...(profileJson.data.profile as ProfileData),
+        ...(profileJson.profile as ProfileData),
       });
     }
-    if (statsJson.data.stats) {
-      const stats = statsJson.data.stats;
+    const stats = statsJson?.stats;
+    if (stats) {
       if (stats.membership) setMembership(stats.membership);
       setRecommendedCount(Array.isArray(stats.recommendedProfiles) ? stats.recommendedProfiles.length : Number(stats.matchesRemaining) || 0);
     }
-    setDocuments(docsJson.data.documents || []);
-    setAppointments(appointmentsJson.data.appointments || []);
-    setNotifications(notificationsJson.data.notifications || []);
-
-    // Every endpoint fell back to demo data — API unreachable. Say so gently
-    // instead of failing silently or throwing errors.
-    if (profileJson.fromMock && statsJson.fromMock && docsJson.fromMock && appointmentsJson.fromMock && notificationsJson.fromMock) {
-      setStatusMessage('Offline preview — showing demo data until the API server is reachable.');
-    }
+    setDocuments(docsJson?.documents || []);
+    setAppointments(appointmentsJson?.appointments || []);
+    setNotifications(notificationsJson?.notifications || []);
+    setOnboarding(onboardingJson?.onboarding || null);
+    // Top 3 by compatibility score (PRD high-priority #1)
+    const scored = [...(matchesJson?.profiles || [])].sort((a, b) => Number(b.matchScore || 0) - Number(a.matchScore || 0));
+    setTopMatches(scored.slice(0, 3));
 
     setLoading(false);
   };
@@ -411,17 +516,26 @@ export default function CustomerDashboardPage() {
     <div className="min-h-screen bg-[#fffaf8] px-4 py-6 text-[#2c0d16] sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl">
         <div className="mb-6 flex flex-col gap-4 rounded-[28px] border border-[#f1d7a6] bg-white p-5 shadow-soft lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[#7b102d]">Customer panel</p>
-            <h1 className="mt-2 flex flex-wrap items-center gap-3 text-3xl font-black tracking-[-0.04em] text-[#2c0d16]">
-              Welcome, {fullName}
+          <div className="flex items-center gap-3.5">
+            <Image
+              src="/logo.png"
+              alt="Shubh Sanjog Matrimony"
+              width={48}
+              height={48}
+              className="hidden h-12 w-12 shrink-0 rounded-full object-contain shadow-sm ring-1 ring-[#e5c88d] sm:block"
+            />
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[#7b102d]">Customer panel</p>
+              <h1 className="mt-2 flex flex-wrap items-center gap-3 text-3xl font-black tracking-[-0.04em] text-[#2c0d16]">
+                Welcome, {fullName}
               {/* §30/§31: Verified Profile badge for admin-approved profiles */}
               {profile.status === 'Approved' ? (
                 <span className="inline-flex items-center gap-1 rounded-full bg-[#eaf8ef] px-3 py-1 text-xs font-bold uppercase tracking-wide text-[#0a7d4c]">
                   <ShieldCheck size={13} /> Verified Profile
                 </span>
               ) : null}
-            </h1>
+              </h1>
+            </div>
           </div>
           <div className="flex items-center gap-3">
             {/* §31: dynamic Profile Completion Score badge */}
@@ -432,6 +546,10 @@ export default function CustomerDashboardPage() {
         </div>
 
         {statusMessage && <div className="mb-5 rounded-2xl border border-[#f2d9a8] bg-[#fffaf3] p-3 text-sm text-[#5a3743]">{statusMessage}</div>}
+        {loadError && <div className="mb-5 rounded-2xl border border-[#f3cccc] bg-[#fdf1f1] p-3 text-sm font-medium text-[#9b1f2f]">{loadError}</div>}
+
+        {/* PRD §3 step-by-step onboarding tracker */}
+        {onboarding && <OnboardingChecklist status={onboarding} />}
 
         <div className="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
           <aside className="rounded-[28px] border border-[#f2d9a8] bg-white p-4 shadow-soft">
@@ -462,6 +580,42 @@ export default function CustomerDashboardPage() {
                   <div className="mt-3 truncate text-2xl font-black text-[#2c0d16]" title={String(card.value)}>{card.value}</div>
                 </div>
               ))}
+            </section>
+
+            {/* Compatibility highlights — PRD high-priority #1: automated
+                match score vs this member's saved partner preferences. */}
+            <section aria-label="Compatibility highlights" className="rounded-[28px] border border-[#f2d9a8] bg-white p-5 shadow-soft">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-xl font-black text-[#2c0d16]">Compatibility highlights</h2>
+                <Link href="/customer/recommended" className="text-sm font-semibold text-[#7b102d] underline underline-offset-2">View all matches</Link>
+              </div>
+              <p className="-mt-2 mb-4 text-sm text-[#5a3743]">Scored against your partner preferences — age, religion &amp; caste, education &amp; career, location and manglik status.</p>
+              {topMatches.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-[#f2d9a8] bg-[#fffaf3] p-4 text-sm text-[#5a3743]">
+                  No scored matches yet — submit your biodata and preferences to unlock compatibility scoring.
+                </div>
+              ) : (
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {topMatches.map((match) => {
+                    const score = Math.max(0, Math.min(100, Number(match.matchScore || 0)));
+                    return (
+                      <Link key={match.id} href="/customer/recommended" className="group rounded-2xl border border-[#f2d8a8] bg-[#fffaf3] p-4 transition hover:border-[#e0bd7a]">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="truncate font-bold text-[#2c0d16]" title={match.name}>{match.name}</div>
+                            <div className="mt-0.5 truncate text-xs text-[#6a4a57]">
+                              {[match.age ? `${match.age} yrs` : '', match.city || '', match.profession || ''].filter(Boolean).join(' • ') || '—'}
+                            </div>
+                          </div>
+                          <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-black ${compatibilityBadgeClass(score)}`} title={match.matchReasons || undefined}>
+                            {score}% Match
+                          </span>
+                        </div>
+                      </Link>
+                    );
+                  })}
+                </div>
+              )}
             </section>
 
             <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
@@ -548,6 +702,13 @@ export default function CustomerDashboardPage() {
                     </select>
                     <textarea value={bookingForm.notes} onChange={(e) => setBookingForm((f) => ({ ...f, notes: e.target.value }))} rows={2} placeholder="Notes" className="w-full rounded-xl border border-[#f2d9a8] px-3 py-2 text-sm" />
                     <button type="submit" disabled={bookingBusy} className="w-full rounded-full bg-[#7b102d] px-4 py-2 text-sm font-bold text-white disabled:opacity-70">{bookingBusy ? 'Booking...' : 'Book consultation'}</button>
+                    {/* PRD high-priority #2 — same request via WhatsApp, pre-filled
+                        with the chosen date / slot / session type. */}
+                    <RequestMeetingButton
+                      message={buildMeetingRequestMessage({ name: fullName, date: bookingForm.date, time: bookingForm.time, type: bookingForm.type, notes: bookingForm.notes })}
+                      label="Or request on WhatsApp"
+                      className="w-full"
+                    />
                   </form>
                 </div>
                 <div className="mt-2 rounded-2xl bg-white p-3 text-sm text-[#5a3743] shadow-sm">

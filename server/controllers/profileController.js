@@ -2,6 +2,10 @@ const { store } = require('../data/store');
 const db = require('../db');
 const { calculateProfileCompletion } = require('./dashboardController');
 
+// All profile mutations write through to the database immediately (real-time
+// CRUD, PRD §3): the store cache is updated and the DB persist happens in the
+// same request. Works identically on MongoDB (production) and SQLite (dev).
+
 function upsertProfile(userId, data) {
   const existing = store.profiles.get(userId) || {};
   const next = { ...existing, ...data, updatedAt: Date.now() };
@@ -11,10 +15,10 @@ function upsertProfile(userId, data) {
 
 async function getProfile(req, res) {
   try {
-    // try DB first
-    if (db._db) {
-      const p = await db.getProfile(db._db, req.user.id);
-      if (p) return res.json({ ok: true, profile: p });
+    const p = await db.getProfile(db._db, req.user.id);
+    if (p) {
+      store.profiles.set(req.user.id, p); // keep cache coherent
+      return res.json({ ok: true, profile: p });
     }
   } catch (err) {
     console.error('getProfile db error', err);
@@ -56,7 +60,7 @@ async function saveProfile(req, res) {
   store.profiles.set(req.user.id, profile);
 
   try {
-    if (db._db) await db.upsertProfile(db._db, req.user.id, profile);
+    await db.upsertProfile(db._db, req.user.id, profile);
   } catch (e) {
     console.warn('db upsert profile failed', e);
   }
@@ -69,9 +73,8 @@ async function savePersonal(req, res) {
   // merge with the existing section so step-by-step saves never wipe fields saved elsewhere
   const existing = store.profiles.get(req.user.id) || {};
   const profile = upsertProfile(req.user.id, { personal: { ...(existing.personal || {}), ...data } });
-  // persist
   try {
-    if (db._db) await db.upsertProfile(db._db, req.user.id, store.profiles.get(req.user.id));
+    await db.upsertProfile(db._db, req.user.id, store.profiles.get(req.user.id));
   } catch (e) {
     console.warn('db upsert personal failed', e);
   }
@@ -83,7 +86,7 @@ async function saveEducation(req, res) {
   const existing = store.profiles.get(req.user.id) || {};
   const profile = upsertProfile(req.user.id, { education: { ...(existing.education || {}), ...data } });
   try {
-    if (db._db) await db.upsertProfile(db._db, req.user.id, store.profiles.get(req.user.id));
+    await db.upsertProfile(db._db, req.user.id, store.profiles.get(req.user.id));
   } catch (e) {
     console.warn('db upsert education failed', e);
   }
@@ -95,7 +98,7 @@ async function saveFamily(req, res) {
   const existing = store.profiles.get(req.user.id) || {};
   const profile = upsertProfile(req.user.id, { family: { ...(existing.family || {}), ...data } });
   try {
-    if (db._db) await db.upsertProfile(db._db, req.user.id, store.profiles.get(req.user.id));
+    await db.upsertProfile(db._db, req.user.id, store.profiles.get(req.user.id));
   } catch (e) {
     console.warn('db upsert family failed', e);
   }
@@ -107,7 +110,7 @@ async function savePreferences(req, res) {
   const existing = store.profiles.get(req.user.id) || {};
   const profile = upsertProfile(req.user.id, { preferences: { ...(existing.preferences || {}), ...data } });
   try {
-    if (db._db) await db.upsertProfile(db._db, req.user.id, store.profiles.get(req.user.id));
+    await db.upsertProfile(db._db, req.user.id, store.profiles.get(req.user.id));
   } catch (e) {
     console.warn('db upsert preferences failed', e);
   }
@@ -119,10 +122,10 @@ async function submitForReview(req, res) {
   try {
     const userId = req.user.id;
     let profile = store.profiles.get(userId);
-    if (db._db) {
+    try {
       const persisted = await db.getProfile(db._db, userId);
       if (persisted) profile = persisted;
-    }
+    } catch (e) { /* fall back to store copy */ }
     if (!profile) return res.status(400).json({ ok: false, error: 'Create your profile before submitting for review' });
     if (profile.status === 'Approved') return res.status(409).json({ ok: false, error: 'Profile is already approved' });
 
@@ -131,20 +134,24 @@ async function submitForReview(req, res) {
       return res.status(400).json({ ok: false, error: 'Complete at least 60% of your profile before submitting for review', profileCompletion: completion });
     }
 
-    if (db._db) await db.submitProfileForReviewDb(db._db, userId, completion);
+    await db.submitProfileForReviewDb(db._db, userId, completion);
     profile.status = 'Submitted';
     profile.reviewNote = null;
     profile.submittedAt = Date.now();
     store.profiles.set(userId, profile);
 
-    // notify admins is implicit via queue; notify customer of submission
+    // notify customer of submission
     try {
-      if (db._db) {
-        await db._db.run(
-          `INSERT INTO notifications (id, toUserId, fromUserId, type, payload, at) VALUES (?, ?, ?, ?, ?, ?);`,
-          [require('uuid').v4(), userId, userId, 'profile_submitted', JSON.stringify({ profileCompletion: completion }), Date.now()]
-        );
-      }
+      const notification = {
+        id: require('uuid').v4(),
+        toUserId: userId,
+        fromUserId: userId,
+        type: 'profile_submitted',
+        payload: JSON.stringify({ profileCompletion: completion }),
+        at: Date.now(),
+      };
+      await db.saveNotificationDb(db._db, notification);
+      store.notifications.unshift(notification);
     } catch (e) { console.warn('submit notification failed', e); }
 
     return res.json({ ok: true, status: 'Submitted', profileCompletion: completion });

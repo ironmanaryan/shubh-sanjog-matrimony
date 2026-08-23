@@ -3,13 +3,14 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { ArrowRight, KeyRound, ShieldCheck } from 'lucide-react';
+import { ArrowRight, KeyRound } from 'lucide-react';
+import Image from 'next/image';
 import OtpInput from '@/components/auth/OtpInput';
 import Button from '@/components/ui/button';
 import GlassCard from '@/components/ui/glass-card';
 import Loader from '@/components/ui/loader';
 import TextField from '@/components/ui/text-field';
-import { sendOtp, verifyOtp, getSession, isDev, DEV_MASTER_OTP } from '@/lib/auth-client';
+import { sendOtp, verifyOtp, getSession } from '@/lib/auth-client';
 
 const EMPTY_OTP = ['', '', '', '', '', ''];
 const RESEND_SECONDS = 30;
@@ -22,8 +23,8 @@ export default function LoginPage() {
   const [message, setMessage] = useState('');
   const [messageTone, setMessageTone] = useState<'info' | 'error' | 'success'>('info');
   const [busy, setBusy] = useState(false);
-  const [offlineMode, setOfflineMode] = useState(false);
   const [resendIn, setResendIn] = useState(0);
+  const [devPreview, setDevPreview] = useState<string | null>(null);
   const otpCompleteRef = useRef(false);
 
   // Already signed in? Route straight to the right workspace.
@@ -64,10 +65,12 @@ export default function LoginPage() {
       setOtp(EMPTY_OTP);
       setResendIn(RESEND_SECONDS);
       otpCompleteRef.current = false;
-      setOfflineMode(Boolean(result.offline));
+      // The server only ever includes demoOtp in non-production environments
+      // with no SMS/email provider configured — never in production.
+      setDevPreview(result.demoOtp || null);
       notify(
         result.demoOtp
-          ? `OTP sent to ${value}. Your code: ${result.demoOtp}${result.offline ? ' (Demo Mode)' : ''}`
+          ? `OTP sent to ${value}. Development code: ${result.demoOtp}`
           : `OTP sent successfully to ${value}.`,
         'success'
       );
@@ -116,7 +119,13 @@ export default function LoginPage() {
             <div className="pointer-events-none absolute -bottom-20 -left-10 h-56 w-56 rounded-full bg-gold-500/10 blur-3xl" />
 
             <div className="inline-flex w-fit items-center gap-2 rounded-full border border-white/25 bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-gold-200">
-              <ShieldCheck size={13} />
+              <Image
+                src="/logo.png"
+                alt="Shubh Sanjog Matrimony logo"
+                width={48}
+                height={48}
+                className="h-5 w-5 rounded-full object-contain"
+              />
               Shubh Sanjog
             </div>
 
@@ -184,16 +193,9 @@ export default function LoginPage() {
                     )}
                   </Button>
 
-                  {isDev() && (
-                    <p className="text-center text-xs font-medium text-[#8a7340]">
-                      Development mode — any mobile number works with OTP{' '}
-                      <span className="rounded-md border border-gold-300/70 bg-[#fffaf0] px-1.5 py-0.5 font-mono font-bold text-maroon-700">
-                        {DEV_MASTER_OTP}
-                      </span>{' '}
-                      · use an identifier containing{' '}
-                      <span className="font-mono font-semibold text-maroon-700">&quot;admin&quot;</span> for admin access
-                    </p>
-                  )}
+                  <p className="text-center text-xs font-medium text-[#8a7340]">
+                    We&apos;ll text a 6-digit one-time code to this number.
+                  </p>
                 </>
               ) : (
                 <>
@@ -225,7 +227,7 @@ export default function LoginPage() {
                       onClick={() => {
                         setOtpSent(false);
                         setOtp(EMPTY_OTP);
-                        setOfflineMode(false);
+                        setDevPreview(null);
                         otpCompleteRef.current = false;
                         notify('');
                       }}
@@ -260,11 +262,10 @@ export default function LoginPage() {
                 </div>
               )}
 
-              {offlineMode && (
+              {devPreview && (
                 <p className="rounded-xl bg-[#fff8e6] px-3.5 py-2.5 text-xs font-medium text-[#8a5a11]">
-                  API server unreachable — running in <strong>Demo Mode</strong>. Enter{' '}
-                  <span className="font-mono font-bold">123456</span> (or any 6-digit code) to sign
-                  in; the dashboard will load with demo data until the API is back online.
+                  Development environment (no SMS provider configured) — your verification code is{' '}
+                  <span className="font-mono font-bold">{devPreview}</span>. Configure a provider in <code>.env</code> to deliver codes by SMS/email.
                 </p>
               )}
 

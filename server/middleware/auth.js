@@ -50,6 +50,7 @@ function verifyTokenMiddleware(req, res, next) {
               identifier: row.identifier,
               role: row.role || 'customer',
               createdAt: row.createdAt,
+              deletedAt: row.deletedAt || null,
             };
             store.users.set(user.id, user);
           }
@@ -60,6 +61,16 @@ function verifyTokenMiddleware(req, res, next) {
     }
 
     if (!user) return res.status(401).json({ error: 'User not found' });
+
+    // Privacy §32: deleted (anonymized) accounts can never hold a session.
+    if (user.deletedAt) return res.status(401).json({ error: 'Account no longer active' });
+
+    // Session revocation: any token issued BEFORE the user's revokedAt
+    // timestamp is rejected — revoking signs out every active session.
+    const revokedAt = store.tokenRevocations.get(decoded.userId);
+    if (revokedAt && Number(decoded.iat || 0) * 1000 < Number(revokedAt)) {
+      return res.status(401).json({ error: 'Session expired — please sign in again' });
+    }
 
     req.user = {
       ...user,

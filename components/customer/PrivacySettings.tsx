@@ -3,19 +3,19 @@
 import { useEffect, useState } from 'react';
 import { EyeOff, Lock, ShieldCheck } from 'lucide-react';
 import { API, requestJson } from '@/lib/api-client';
-import { MOCK_PRIVACY } from '@/lib/mock-data';
 
 type PrivacyState = { hidePhoto: boolean; hidePhone: boolean };
 
+const DEFAULT_PRIVACY: PrivacyState = { hidePhoto: false, hidePhone: false };
+
 export default function PrivacySettings() {
-  const [privacy, setPrivacy] = useState<PrivacyState>(MOCK_PRIVACY);
+  const [privacy, setPrivacy] = useState<PrivacyState>(DEFAULT_PRIVACY);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
 
   useEffect(() => {
     const token = localStorage.getItem('token');
     if (!token) return;
-    // Silent fallback: if the API is unreachable the demo defaults above stay.
     fetch(`${API}/customer/privacy`, { headers: { Authorization: `Bearer ${token}` } })
       .then(async (res) => {
         if (!res.ok) return;
@@ -24,7 +24,7 @@ export default function PrivacySettings() {
           setPrivacy({ hidePhoto: json.privacy.hidePhoto === true, hidePhone: json.privacy.hidePhone === true });
         }
       })
-      .catch(() => undefined); // offline — keep mock/defaults quietly
+      .catch(() => undefined); // offline — keep defaults quietly
   }, []);
 
   const toggle = async (key: keyof PrivacyState) => {

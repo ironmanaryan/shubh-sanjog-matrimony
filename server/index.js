@@ -4,6 +4,10 @@ const path = require('path');
 const fs = require('fs');
 const dotenv = require('dotenv');
 
+// Load env from server/.env first, then the repo-root .env as a fallback, so
+// `npm run server` works no matter the launch directory (dotenv never
+// overrides variables that are already set).
+dotenv.config({ path: path.join(__dirname, '.env') });
 dotenv.config();
 
 const app = express();

@@ -42,11 +42,10 @@ async function listSlots(req, res) {
 async function listMyAppointments(req, res) {
   try {
     const userId = req.user.id;
-    if (db._db) {
+    // The database is the source of truth; empty list is a valid answer.
+    if (db.isReady()) {
       const rows = await db.listAppointments(db._db, userId);
-      if (rows && rows.length) {
-        return res.json({ ok: true, appointments: rows });
-      }
+      return res.json({ ok: true, appointments: (rows || []).sort((a, b) => new Date(a.date) - new Date(b.date)) });
     }
 
     const appointments = Array.from(store.appointments.values()).filter((a) => a.userId === userId).sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -93,12 +92,18 @@ async function bookAppointment(req, res) {
 
     store.appointments.set(booking.id, booking);
     try {
-      if (db._db) {
+      if (db.isReady()) {
         await db.saveAppointment(db._db, booking);
-        await db._db.run(
-          `INSERT INTO notifications (id, toUserId, fromUserId, type, payload, at) VALUES (?, ?, ?, ?, ?, ?);`,
-          [uuidv4(), userId, userId, 'appointment_confirmed', JSON.stringify({ appointmentId: booking.id, date, time }), Date.now()]
-        );
+        const notification = {
+          id: uuidv4(),
+          toUserId: userId,
+          fromUserId: userId,
+          type: 'appointment_confirmed',
+          payload: JSON.stringify({ appointmentId: booking.id, date, time }),
+          at: Date.now(),
+        };
+        await db.saveNotificationDb(db._db, notification);
+        store.notifications.unshift(notification);
       }
     } catch (e) {
       console.warn('db save appointment failed', e);

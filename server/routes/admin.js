@@ -1,12 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const fs = require('fs');
-const { verifyTokenMiddleware } = require('../middleware/auth');
+const { verifyTokenMiddleware, requireAdmin } = require('../middleware/auth');
 const { ROLES, ASSIGNABLE_ROLES, STAFF_ROLES, permissionsFor, requireStaffRole, requirePermission } = require('../middleware/rbac');
 const { listNotes, addNote } = require('../controllers/internalNotesController');
 const { listInquiries, updateInquiryStatus } = require('../controllers/inquiriesController');
 const { store, activateMembership, getPlan } = require('../data/store');
 const db = require('../db');
+const { auditTrail, writeAuditLog, clientIp } = require('../utils/audit');
 
 function toCandidateSummary(profile, userId, identifier) {
   return {
@@ -26,6 +27,7 @@ function toCandidateSummary(profile, userId, identifier) {
     highestQualification: profile?.education?.highestQualification || '',
     caste: profile?.personal?.caste || '',
     state: profile?.personal?.state || '',
+    manglik: profile?.personal?.manglikStatus || '',
   };
 }
 
@@ -82,16 +84,14 @@ router.get('/customers', verifyTokenMiddleware, requireStaffRole, async (req, re
 // GET /api/admin/customers/:id — full customer detail (personal, education,
 // family structure, preferences) for the admin customer workspace page
 // /admin/customers/[id]. Contact details stay staff-visible only.
-router.get('/customers/:id', verifyTokenMiddleware, requireStaffRole, async (req, res) => {
+router.get('/customers/:id', verifyTokenMiddleware, requireStaffRole, auditTrail('VIEW_PROFILE', (req) => req.params.id), async (req, res) => {
   try {
     const userId = String(req.params.id || '');
     const user = store.users.get(userId);
     let profile = store.profiles.get(userId) || null;
     try {
-      if (db._db) {
-        const persisted = await db.getProfile(db._db, userId);
-        if (persisted) profile = persisted;
-      }
+      const persisted = await db.getProfile(db._db, userId);
+      if (persisted) profile = persisted;
     } catch (e) { console.warn('customer detail db lookup failed', e); }
 
     if (!user && !profile) return res.status(404).json({ ok: false, error: 'Customer not found' });
@@ -104,7 +104,7 @@ router.get('/customers/:id', verifyTokenMiddleware, requireStaffRole, async (req
 
     let assignments = [];
     try {
-      if (db._db) assignments = await db.listMatchAssignmentsDb(db._db, userId);
+      assignments = await db.listMatchAssignmentsDb(db._db, userId);
     } catch (e) { console.warn('list assignments for customer failed', e); }
 
     return res.json({
@@ -190,6 +190,28 @@ router.get('/matching/candidates', verifyTokenMiddleware, requireStaffRole, asyn
       results.push({ ...summary, interestStatusFromCaller: req.query.customerId ? interestStatusBetweenUsers(String(req.query.customerId), userId) : null });
     }
 
+    // PRD high-priority #1: when filtering for a specific customer, annotate each
+    // candidate with that customer's real compatibility score (replaces the
+    // random placeholder in the summary).
+    if (req.query.customerId) {
+      const customerProfile = store.profiles.get(String(req.query.customerId));
+      const { computeCompatibility } = require('../utils/compatibility');
+      for (const result of results) {
+        const compatibility = computeCompatibility(customerProfile?.preferences || {}, {
+          age: result.age,
+          religion: result.religion,
+          caste: result.caste,
+          highestQualification: result.highestQualification,
+          profession: result.profession,
+          city: result.city,
+          state: result.state,
+          manglik: result.manglik,
+        });
+        result.matchScore = compatibility.score;
+        result.matchReasons = compatibility.reasons.join(' · ');
+      }
+    }
+
     return res.json({ ok: true, count: results.length, candidates: results });
   } catch (error) {
     console.error('matching candidates error', error);
@@ -199,7 +221,7 @@ router.get('/matching/candidates', verifyTokenMiddleware, requireStaffRole, asyn
 
 // POST /api/admin/match-assignment — assign/recommend a match to a customer.
 // RBAC §29: admin + relationship_manager only (`manageMatches`).
-router.post('/match-assignment', verifyTokenMiddleware, requirePermission('manageMatches'), async (req, res) => {
+router.post('/match-assignment', verifyTokenMiddleware, requirePermission('manageMatches'), auditTrail('MANAGE_MATCH', (req) => req.body?.customerId || null), async (req, res) => {
   try {
     const { customerId, candidateId, note = '' } = req.body || {};
     if (!customerId || !candidateId) return res.status(400).json({ ok: false, error: 'customerId and candidateId required' });
@@ -211,13 +233,17 @@ router.post('/match-assignment', verifyTokenMiddleware, requirePermission('manag
 
     // persist + notify the customer (scope PDF §17 "New Match Assigned")
     try {
-      if (db._db) {
-        await db.saveMatchAssignmentDb(db._db, assignment);
-        await db._db.run(
-          `INSERT INTO notifications (id, toUserId, fromUserId, type, payload, at) VALUES (?, ?, ?, ?, ?, ?);`,
-          [require('uuid').v4(), customerId, req.user.id, 'new_match_assigned', JSON.stringify({ assignmentId: assignment.id, candidateId }), Date.now()]
-        );
-      }
+      await db.saveMatchAssignmentDb(db._db, assignment);
+      const { v4: uuidv4 } = require('uuid');
+      await db.saveNotificationDb(db._db, {
+        id: uuidv4(),
+        toUserId: customerId,
+        fromUserId: req.user.id,
+        type: 'new_match_assigned',
+        payload: JSON.stringify({ assignmentId: assignment.id, candidateId }),
+        at: Date.now(),
+      });
+      store.notifications.unshift({ id: require('uuid').v4(), toUserId: customerId, fromUserId: req.user.id, type: 'new_match_assigned', payload: JSON.stringify({ assignmentId: assignment.id, candidateId }), at: Date.now() });
     } catch (e) {
       console.warn('db save match assignment failed', e);
     }
@@ -234,8 +260,7 @@ router.post('/match-assignment', verifyTokenMiddleware, requirePermission('manag
 router.get('/match-assignments', verifyTokenMiddleware, requireStaffRole, async (req, res) => {
   try {
     let rows = [];
-    if (db._db) rows = await db.listMatchAssignmentsDb(db._db, req.query.customerId || null);
-    else rows = Array.from(store.matchAssignments.values()).flat();
+    try { rows = await db.listMatchAssignmentsDb(db._db, req.query.customerId || null); } catch (e) { rows = Array.from(store.matchAssignments.values()).flat(); }
     const assignments = rows.map((row) => ({
       ...row,
       customerName: displayNameOf(row.customerId),
@@ -277,7 +302,6 @@ function toProfileReviewView(row) {
 // GET /api/admin/profiles?status=Submitted|Under Review|Approved|Rejected|Draft
 router.get('/profiles', verifyTokenMiddleware, requirePermission('viewQueues'), async (req, res) => {
   try {
-    if (!db._db) return res.status(503).json({ ok: false, error: 'Database unavailable' });
     const statusParam = String(req.query.status || '').trim();
     const statuses = statusParam ? [statusParam] : ['Submitted', 'Under Review'];
     const rows = await db.listProfilesByStatusDb(db._db, statuses);
@@ -292,7 +316,6 @@ async function reviewProfile(req, res, nextStatus, fallbackNote) {
   try {
     const { userId, note } = req.body || {};
     if (!userId) return res.status(400).json({ ok: false, error: 'userId required' });
-    if (!db._db) return res.status(503).json({ ok: false, error: 'Database unavailable' });
 
     const finalNote = note || fallbackNote;
     await db.setProfileReview(db._db, userId, { status: nextStatus, reviewNote: finalNote });
@@ -304,13 +327,16 @@ async function reviewProfile(req, res, nextStatus, fallbackNote) {
       cached.reviewNote = finalNote;
       cached.reviewedAt = Date.now();
       store.profiles.set(userId, cached);
+    } else {
+      const fresh = await db.getProfile(db._db, userId);
+      if (fresh) store.profiles.set(userId, fresh);
     }
 
+    const { v4: uuidv4 } = require('uuid');
     const type = nextStatus === 'Approved' ? 'profile_approved' : 'profile_rejected';
-    await db._db.run(
-      `INSERT INTO notifications (id, toUserId, fromUserId, type, payload, at) VALUES (?, ?, ?, ?, ?, ?);`,
-      [require('uuid').v4(), userId, req.user.id, type, JSON.stringify({ status: nextStatus, note: finalNote }), Date.now()]
-    );
+    const notification = { id: uuidv4(), toUserId: userId, fromUserId: req.user.id, type, payload: JSON.stringify({ status: nextStatus, note: finalNote }), at: Date.now() };
+    await db.saveNotificationDb(db._db, notification);
+    store.notifications.unshift(notification);
 
     return res.json({ ok: true, userId, status: nextStatus, reviewNote: finalNote });
   } catch (error) {
@@ -321,48 +347,30 @@ async function reviewProfile(req, res, nextStatus, fallbackNote) {
 
 // POST /api/admin/profiles/approve { userId, note? } — approval unmasks photo/contact per privacy rules
 // RBAC §29: admin + relationship_manager (`reviewProfiles`); staff is read-only.
-router.post('/profiles/approve', verifyTokenMiddleware, requirePermission('reviewProfiles'), (req, res) => reviewProfile(req, res, 'Approved', null));
+router.post('/profiles/approve', verifyTokenMiddleware, requirePermission('reviewProfiles'), auditTrail('UPDATE_STATUS', (req) => req.body?.userId || null), (req, res) => reviewProfile(req, res, 'Approved', null));
 // POST /api/admin/profiles/reject { userId, reason }
-router.post('/profiles/reject', verifyTokenMiddleware, requirePermission('reviewProfiles'), (req, res) => reviewProfile(req, res, 'Rejected', 'No reason provided'));
+router.post('/profiles/reject', verifyTokenMiddleware, requirePermission('reviewProfiles'), auditTrail('UPDATE_STATUS', (req) => req.body?.userId || null), (req, res) => reviewProfile(req, res, 'Rejected', 'No reason provided'));
 // POST /api/admin/profiles/request-changes { userId, note } — back to Under Review with change request
-router.post('/profiles/request-changes', verifyTokenMiddleware, requirePermission('reviewProfiles'), (req, res) => reviewProfile(req, res, 'Under Review', 'Changes requested'));
+router.post('/profiles/request-changes', verifyTokenMiddleware, requirePermission('reviewProfiles'), auditTrail('UPDATE_STATUS', (req) => req.body?.userId || null), (req, res) => reviewProfile(req, res, 'Under Review', 'Changes requested'));
 
 // GET /api/admin/documents
 router.get('/documents', verifyTokenMiddleware, requirePermission('viewQueues'), async (req, res) => {
   try {
-    if (db._db) {
-      const rows = await db._db.all(`SELECT d.*, u.identifier AS customerIdentifier FROM documents d LEFT JOIN users u ON u.id = d.userId ORDER BY d.uploadedAt DESC`);
-      return res.json({ ok: true, documents: rows.map((row) => ({
-        id: row.id,
-        userId: row.userId,
-        customerId: row.userId,
-        customerName: row.customerIdentifier || row.userId,
-        documentType: row.documentType || (row.originalName?.includes('kundli') ? 'kundli' : 'identity'),
-        status: row.status || 'Pending',
-        rejectionReason: row.rejectionReason || null,
-        originalName: row.originalName,
-        uploadedAt: row.uploadedAt,
-        mimetype: row.mimetype,
-        size: row.size,
-      })) });
-    }
-
-    const documents = [];
-    for (const [id, meta] of store.documents.entries()) {
-      documents.push({
-        id,
-        userId: meta.userId,
-        customerId: meta.userId,
-        customerName: meta.userId,
-        documentType: meta.documentType || (meta.originalName?.includes('kundli') ? 'kundli' : 'identity'),
-        status: meta.status || 'Pending',
-        rejectionReason: meta.rejectionReason || null,
-        originalName: meta.originalName,
-        uploadedAt: meta.uploadedAt,
-        mimetype: meta.mimetype,
-        size: meta.size,
-      });
-    }
+    const rows = await db.listDocuments(db._db);
+    const documents = rows.map((row) => ({
+      id: row.id,
+      userId: row.userId,
+      customerId: row.userId,
+      customerName: displayNameOf(row.userId),
+      customerIdentifier: store.users.get(row.userId)?.identifier || row.userId,
+      documentType: row.documentType || (row.originalName?.includes('kundli') ? 'kundli' : 'identity'),
+      status: row.status || 'Pending',
+      rejectionReason: row.rejectionReason || null,
+      originalName: row.originalName,
+      uploadedAt: row.uploadedAt,
+      mimetype: row.mimetype,
+      size: row.size,
+    }));
     return res.json({ ok: true, documents });
   } catch (error) {
     console.error('list admin documents error', error);
@@ -371,26 +379,26 @@ router.get('/documents', verifyTokenMiddleware, requirePermission('viewQueues'),
 });
 
 // POST /api/admin/documents/approve
-router.post('/documents/approve', verifyTokenMiddleware, requirePermission('reviewProfiles'), async (req, res) => {
+router.post('/documents/approve', verifyTokenMiddleware, requirePermission('reviewProfiles'), auditTrail('UPDATE_STATUS', (req) => store.documents.get(req.body?.id)?.userId || null), async (req, res) => {
   const { id } = req.body || {};
   if (!id) return res.status(400).json({ ok: false, error: 'id required' });
   const meta = store.documents.get(id);
   if (meta) meta.status = 'Approved';
   try {
-    if (db._db) await db.setDocumentStatus(db._db, id, 'Approved', null);
+    await db.setDocumentStatus(db._db, id, 'Approved', null);
   } catch (e) { console.warn('db set status failed', e); }
   return res.json({ ok: true, id, status: 'Approved' });
 });
 
 // POST /api/admin/documents/reject
-router.post('/documents/reject', verifyTokenMiddleware, requirePermission('reviewProfiles'), async (req, res) => {
+router.post('/documents/reject', verifyTokenMiddleware, requirePermission('reviewProfiles'), auditTrail('UPDATE_STATUS', (req) => store.documents.get(req.body?.id)?.userId || null), async (req, res) => {
   const { id, reason } = req.body || {};
   if (!id) return res.status(400).json({ ok: false, error: 'id required' });
   const meta = store.documents.get(id);
   if (meta) meta.status = 'Rejected';
   if (meta) meta.rejectionReason = reason || 'No reason provided';
   try {
-    if (db._db) await db.setDocumentStatus(db._db, id, 'Rejected', reason || 'No reason provided');
+    await db.setDocumentStatus(db._db, id, 'Rejected', reason || 'No reason provided');
   } catch (e) { console.warn('db set status failed', e); }
   return res.json({ ok: true, id, status: 'Rejected', reason: reason || 'No reason provided' });
 });
@@ -419,29 +427,11 @@ function paymentWithCustomer(payment) {
   };
 }
 
-// GET /api/admin/payments — every submitted UPI payment
+// GET /api/admin/payments — every submitted manual UPI payment
 router.get('/payments', verifyTokenMiddleware, requirePermission('viewQueues'), async (req, res) => {
   try {
     let payments = [];
-    if (db._db && db._db.all) {
-      const rows = await db.listPayments(db._db);
-      payments = rows.map((row) => ({
-        id: row.id,
-        userId: row.userId,
-        plan: row.plan,
-        amount: row.amount,
-        upiId: row.upiId,
-        utr: row.utr,
-        status: row.status || 'Pending Verification',
-        rejectionReason: row.rejectionReason || null,
-        receiptPath: row.receiptPath,
-        receiptName: row.receiptName,
-        createdAt: row.createdAt,
-        reviewedAt: row.reviewedAt,
-      }));
-    } else {
-      payments = Array.from(store.payments.values());
-    }
+    try { payments = await db.listPayments(db._db); } catch (e) { payments = Array.from(store.payments.values()); }
     const sorted = payments.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     return res.json({ ok: true, payments: sorted.map(paymentWithCustomer) });
   } catch (error) {
@@ -452,7 +442,7 @@ router.get('/payments', verifyTokenMiddleware, requirePermission('viewQueues'), 
 
 // POST /api/admin/payments/approve { id } — verify the UTR and activate the purchased membership
 // RBAC §29: admin only (`verifyPayments`) — staff/RM cannot touch money flows.
-router.post('/payments/approve', verifyTokenMiddleware, requirePermission('verifyPayments'), async (req, res) => {
+router.post('/payments/approve', verifyTokenMiddleware, requirePermission('verifyPayments'), auditTrail('UPDATE_STATUS', (req) => store.payments.get(req.body?.id)?.userId || null), async (req, res) => {
   try {
     const { id } = req.body || {};
     if (!id) return res.status(400).json({ ok: false, error: 'id required' });
@@ -475,15 +465,13 @@ router.post('/payments/approve', verifyTokenMiddleware, requirePermission('verif
     payment.status = 'Approved';
     payment.reviewedAt = Date.now();
     try {
-      if (db._db) {
-        await db.setPaymentStatus(db._db, id, 'Approved', null);
-        await db.saveMembershipDb(db._db, payment.userId, membership, id);
-        const type = payment.plan === 'Consultation' ? 'payment_approved' : 'membership_activated';
-        await db._db.run(
-          `INSERT INTO notifications (id, toUserId, fromUserId, type, payload, at) VALUES (?, ?, ?, ?, ?, ?);`,
-          [require('uuid').v4(), payment.userId, req.user.id, type, JSON.stringify({ paymentId: id, plan: payment.plan }), Date.now()]
-        );
-      }
+      await db.setPaymentStatus(db._db, id, 'Approved', null);
+      await db.saveMembershipDb(db._db, payment.userId, membership, id);
+      const { v4: uuidv4 } = require('uuid');
+      const type = payment.plan === 'Consultation' ? 'payment_approved' : 'membership_activated';
+      const notification = { id: uuidv4(), toUserId: payment.userId, fromUserId: req.user.id, type, payload: JSON.stringify({ paymentId: id, plan: payment.plan }), at: Date.now() };
+      await db.saveNotificationDb(db._db, notification);
+      store.notifications.unshift(notification);
     } catch (e) {
       console.warn('db approve payment failed', e);
     }
@@ -496,7 +484,7 @@ router.post('/payments/approve', verifyTokenMiddleware, requirePermission('verif
 });
 
 // POST /api/admin/payments/reject { id, reason }
-router.post('/payments/reject', verifyTokenMiddleware, requirePermission('verifyPayments'), async (req, res) => {
+router.post('/payments/reject', verifyTokenMiddleware, requirePermission('verifyPayments'), auditTrail('UPDATE_STATUS', (req) => store.payments.get(req.body?.id)?.userId || null), async (req, res) => {
   try {
     const { id, reason } = req.body || {};
     if (!id) return res.status(400).json({ ok: false, error: 'id required' });
@@ -512,13 +500,11 @@ router.post('/payments/reject', verifyTokenMiddleware, requirePermission('verify
     payment.rejectionReason = finalReason;
     payment.reviewedAt = Date.now();
     try {
-      if (db._db) {
-        await db.setPaymentStatus(db._db, id, 'Rejected', finalReason);
-        await db._db.run(
-          `INSERT INTO notifications (id, toUserId, fromUserId, type, payload, at) VALUES (?, ?, ?, ?, ?, ?);`,
-          [require('uuid').v4(), payment.userId, req.user.id, 'payment_rejected', JSON.stringify({ paymentId: id, reason: finalReason }), Date.now()]
-        );
-      }
+      await db.setPaymentStatus(db._db, id, 'Rejected', finalReason);
+      const { v4: uuidv4 } = require('uuid');
+      const notification = { id: uuidv4(), toUserId: payment.userId, fromUserId: req.user.id, type: 'payment_rejected', payload: JSON.stringify({ paymentId: id, reason: finalReason }), at: Date.now() };
+      await db.saveNotificationDb(db._db, notification);
+      store.notifications.unshift(notification);
     } catch (e) {
       console.warn('db reject payment failed', e);
     }
@@ -531,7 +517,7 @@ router.post('/payments/reject', verifyTokenMiddleware, requirePermission('verify
 });
 
 // GET /api/admin/payments/:id/receipt — stream the uploaded receipt to staff
-router.get('/payments/:id/receipt', verifyTokenMiddleware, requireStaffRole, async (req, res) => {
+router.get('/payments/:id/receipt', verifyTokenMiddleware, requireStaffRole, auditTrail('VIEW_DOCUMENT', (req) => store.payments.get(req.params.id)?.userId || null), async (req, res) => {
   try {
     const payment = store.payments.get(req.params.id);
     if (!payment) return res.status(404).json({ ok: false, error: 'Payment not found' });
@@ -551,13 +537,16 @@ router.get('/payments/:id/receipt', verifyTokenMiddleware, requireStaffRole, asy
 });
 
 // GET /api/admin/stats - overview metrics + attention-required items for the admin dashboard
+// GET /api/admin/stats - overview metrics + attention-required items.
+// Computed from the hydrated store (kept coherent by every write path), so the
+// numbers are identical in MongoDB and SQLite modes without SQL per engine.
 router.get('/stats', verifyTokenMiddleware, requirePermission('viewQueues'), async (req, res) => {
   try {
-    const database = db._db;
     const today = new Date().toISOString().slice(0, 10);
     const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
 
-    let stats = {
+    const stats = {
       totalCustomers: 0,
       newCustomers: 0,
       activeMembers: 0,
@@ -567,11 +556,11 @@ router.get('/stats', verifyTokenMiddleware, requirePermission('viewQueues'), asy
       pendingProfiles: 0,
       approvedProfiles: 0,
       rejectedProfiles: 0,
-      profilesCreated: 0,
+      profilesCreated: store.profiles.size,
       avgProfileCompletion: 0,
       upcomingAppointments: 0,
       completedAppointments: 0,
-      totalAppointments: 0,
+      totalAppointments: store.appointments.size,
       pendingPayments: 0,
       approvedPayments: 0,
       rejectedPayments: 0,
@@ -580,115 +569,91 @@ router.get('/stats', verifyTokenMiddleware, requirePermission('viewQueues'), asy
       expiringMemberships: 0,
       revenueApproved: 0,
     };
-    let attention = { pendingDocuments: [], upcomingAppointments: [], recentCustomers: [], pendingPayments: [], pendingProfiles: [] };
+    let completionSum = 0;
 
-    if (database) {
-      const count = async (sql, params = []) => {
-        const row = await database.get(`SELECT COUNT(*) AS n FROM (${sql})`, params);
-        return row ? Number(row.n) : 0;
-      };
-
-      stats.totalCustomers = await count(`SELECT 1 FROM users WHERE role != 'admin'`);
-      stats.newCustomers = await count(`SELECT 1 FROM users WHERE role != 'admin' AND createdAt >= ?`, [weekAgo]);
-      stats.pendingDocuments = await count(`SELECT 1 FROM documents WHERE status IN ('Pending', 'Pending Review')`);
-      stats.approvedDocuments = await count(`SELECT 1 FROM documents WHERE status = 'Approved'`);
-      stats.rejectedDocuments = await count(`SELECT 1 FROM documents WHERE status = 'Rejected'`);
-      stats.pendingProfiles = await count(`SELECT 1 FROM profiles WHERE status = 'Submitted'`);
-      stats.approvedProfiles = await count(`SELECT 1 FROM profiles WHERE status = 'Approved'`);
-      stats.rejectedProfiles = await count(`SELECT 1 FROM profiles WHERE status = 'Rejected'`);
-      stats.profilesCreated = await count(`SELECT 1 FROM profiles`);
-      stats.upcomingAppointments = await count(`SELECT 1 FROM appointments WHERE status = 'Booked' AND date >= ?`, [today]);
-      stats.completedAppointments = await count(`SELECT 1 FROM appointments WHERE status = 'Completed'`);
-      stats.totalAppointments = await count(`SELECT 1 FROM appointments`);
-      stats.pendingPayments = await count(`SELECT 1 FROM payments WHERE status = 'Pending Verification'`);
-      stats.approvedPayments = await count(`SELECT 1 FROM payments WHERE status = 'Approved'`);
-      stats.rejectedPayments = await count(`SELECT 1 FROM payments WHERE status = 'Rejected'`);
-
-      const completionRow = await database.get(`SELECT AVG(profileCompletion) AS avg FROM profiles`);
-      stats.avgProfileCompletion = Math.round(Number(completionRow?.avg) || 0);
-
-      // membership + revenue metrics from persisted rows
-      const now = Date.now();
-      const memberRows = await database.all(`SELECT tier, active, expiresAt FROM memberships`);
-      for (const m of memberRows) {
-        if (!m.active) continue;
-        if (m.expiresAt && Number(m.expiresAt) < now) continue;
-        stats.activeMembers += 1;
-        if (m.tier === 'Gold') stats.activeGoldMemberships += 1;
-        if (m.tier === 'Premium') stats.activePremiumMemberships += 1;
-        if (m.expiresAt && Number(m.expiresAt) < now + 7 * 24 * 60 * 60 * 1000) stats.expiringMemberships += 1;
-      }
-      const revenueRow = await database.get(`SELECT COALESCE(SUM(amount), 0) AS total FROM payments WHERE status = 'Approved'`);
-      stats.revenueApproved = Number(revenueRow?.total) || 0;
-
-      attention.pendingDocuments = await database.all(
-        `SELECT d.id, d.originalName, d.uploadedAt, u.identifier AS customerName
-         FROM documents d LEFT JOIN users u ON u.id = d.userId
-         WHERE d.status IN ('Pending', 'Pending Review') ORDER BY d.uploadedAt DESC LIMIT 5`
-      );
-      attention.pendingProfiles = await database.all(
-        `SELECT p.userId AS id, p.submittedAt, p.profileCompletion, u.identifier AS customerName
-         FROM profiles p LEFT JOIN users u ON u.id = p.userId
-         WHERE p.status = 'Submitted' ORDER BY p.submittedAt DESC LIMIT 5`
-      );
-      attention.upcomingAppointments = await database.all(
-        `SELECT a.id, a.date, a.time, a.type, u.identifier AS customerName
-         FROM appointments a LEFT JOIN users u ON u.id = a.userId
-         WHERE a.status = 'Booked' AND a.date >= ? ORDER BY a.date ASC LIMIT 5`,
-        [today]
-      );
-      attention.recentCustomers = await database.all(
-        `SELECT id, identifier, createdAt FROM users WHERE role != 'admin' ORDER BY createdAt DESC LIMIT 5`
-      );
-      attention.pendingPayments = await database.all(
-        `SELECT p.id, p.plan, p.amount, p.createdAt, u.identifier AS customerName
-         FROM payments p LEFT JOIN users u ON u.id = p.userId
-         WHERE p.status = 'Pending Verification' ORDER BY p.createdAt DESC LIMIT 5`
-      );
-    } else {
-      for (const user of store.users.values()) {
-        if (user.role !== 'admin') {
-          stats.totalCustomers += 1;
-          if ((user.createdAt || 0) >= weekAgo) stats.newCustomers += 1;
-        }
-      }
-      for (const doc of store.documents.values()) {
-        if (doc.status === 'Pending') stats.pendingDocuments += 1;
-        else if (doc.status === 'Approved') stats.approvedDocuments += 1;
-        else if (doc.status === 'Rejected') stats.rejectedDocuments += 1;
-      }
-      for (const payment of store.payments.values()) {
-        if (payment.status === 'Pending Verification') stats.pendingPayments += 1;
-        else if (payment.status === 'Approved') stats.approvedPayments += 1;
-        else if (payment.status === 'Rejected') stats.rejectedPayments += 1;
-      }
-      stats.profilesCreated = store.profiles.size;
-      for (const appointment of store.appointments.values()) {
-        stats.totalAppointments += 1;
-        if (appointment.status === 'Completed') stats.completedAppointments += 1;
-        else if (appointment.status !== 'Cancelled' && String(appointment.date) >= today) stats.upcomingAppointments += 1;
-      }
-      stats.activeMembers = Array.from(store.memberships.values()).filter((m) => m && m.active).length;
-
-      attention.pendingDocuments = Array.from(store.documents.values())
-        .filter((d) => d.status === 'Pending')
-        .slice(0, 5)
-        .map((d) => ({ id: d.id, originalName: d.originalName, uploadedAt: d.uploadedAt, customerName: d.userId }));
-      attention.upcomingAppointments = Array.from(store.appointments.values())
-        .filter((a) => a.status !== 'Cancelled' && String(a.date) >= today)
-        .slice(0, 5)
-        .map((a) => ({ id: a.id, date: a.date, time: a.time, type: a.type, customerName: a.userId }));
-      attention.recentCustomers = Array.from(store.users.values())
-        .filter((u) => u.role !== 'admin')
-        .slice(0, 5)
-        .map((u) => ({ id: u.id, identifier: u.identifier, createdAt: u.createdAt }));
-      attention.pendingPayments = Array.from(store.payments.values())
-        .filter((p) => p.status === 'Pending Verification')
-        .slice(0, 5)
-        .map((p) => ({ id: p.id, plan: p.plan, amount: p.amount, createdAt: p.createdAt, customerName: (store.users.get(p.userId) || {}).identifier || p.userId }));
+    for (const user of store.users.values()) {
+      if (user.role === 'admin') continue;
+      stats.totalCustomers += 1;
+      if ((user.createdAt || 0) >= weekAgo) stats.newCustomers += 1;
     }
 
-    return res.json({ ok: true, stats, attention });
+    for (const profile of store.profiles.values()) {
+      completionSum += Number(profile.profileCompletion || 0);
+      switch (profile.status || 'Draft') {
+        case 'Submitted': stats.pendingProfiles += 1; break;
+        case 'Under Review': stats.pendingProfiles += 1; break;
+        case 'Approved': stats.approvedProfiles += 1; break;
+        case 'Rejected': stats.rejectedProfiles += 1; break;
+        default: break;
+      }
+    }
+    stats.avgProfileCompletion = stats.profilesCreated > 0 ? Math.round(completionSum / stats.profilesCreated) : 0;
+
+    for (const doc of store.documents.values()) {
+      if (['Pending', 'Pending Review'].includes(doc.status)) stats.pendingDocuments += 1;
+      else if (doc.status === 'Approved') stats.approvedDocuments += 1;
+      else if (doc.status === 'Rejected') stats.rejectedDocuments += 1;
+    }
+
+    for (const appointment of store.appointments.values()) {
+      if (appointment.status === 'Completed') { stats.completedAppointments += 1; continue; }
+      if (appointment.status === 'Cancelled') continue;
+      if (String(appointment.date) >= today) stats.upcomingAppointments += 1;
+    }
+
+    for (const payment of store.payments.values()) {
+      const amount = Number(payment.amount || 0);
+      if (payment.status === 'Approved') { stats.approvedPayments += 1; stats.revenueApproved += amount; }
+      else if (payment.status === 'Rejected') stats.rejectedPayments += 1;
+      else stats.pendingPayments += 1;
+    }
+
+    for (const m of store.memberships.values()) {
+      if (!m || !m.active) continue;
+      if (m.expiresAt && Number(m.expiresAt) < now) continue;
+      stats.activeMembers += 1;
+      if (m.tier === 'Gold') stats.activeGoldMemberships += 1;
+      if (m.tier === 'Premium') stats.activePremiumMemberships += 1;
+      if (m.expiresAt && Number(m.expiresAt) < now + 7 * 24 * 60 * 60 * 1000) stats.expiringMemberships += 1;
+    }
+
+    const nameOf = (userId) => displayNameOf(userId);
+
+    const pendingDocuments = Array.from(store.documents.values())
+      .filter((d) => ['Pending', 'Pending Review'].includes(d.status))
+      .sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0))
+      .slice(0, 5)
+      .map((d) => ({ id: d.id, originalName: d.originalName, uploadedAt: d.uploadedAt, customerName: nameOf(d.userId) }));
+
+    const pendingProfiles = Array.from(store.profiles.values())
+      .filter((p) => p.status === 'Submitted')
+      .sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0))
+      .slice(0, 5)
+      .map((p) => ({ id: p.userId, submittedAt: p.submittedAt, profileCompletion: p.profileCompletion || 0, customerName: nameOf(p.userId) }));
+
+    const upcomingAppointments = Array.from(store.appointments.values())
+      .filter((a) => a.status !== 'Cancelled' && a.status !== 'Completed' && String(a.date) >= today)
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+      .slice(0, 5)
+      .map((a) => ({ id: a.id, date: a.date, time: a.time, type: a.type, customerName: nameOf(a.userId) }));
+
+    const recentCustomers = Array.from(store.users.values())
+      .filter((u) => u.role !== 'admin')
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+      .slice(0, 5)
+      .map((u) => ({ id: u.id, identifier: u.identifier, createdAt: u.createdAt }));
+
+    const pendingPayments = Array.from(store.payments.values())
+      .filter((p) => p.status === 'Pending Verification' || p.status === 'Paid')
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+      .slice(0, 5)
+      .map((p) => ({ id: p.id, plan: p.plan, amount: p.amount, createdAt: p.createdAt, customerName: nameOf(p.userId) }));
+
+    return res.json({
+      ok: true,
+      stats,
+      attention: { pendingDocuments, upcomingAppointments, recentCustomers, pendingPayments, pendingProfiles },
+    });
   } catch (error) {
     console.error('get admin stats error', error);
     return res.status(500).json({ ok: false, error: 'Server error' });
@@ -730,7 +695,7 @@ router.get('/team', verifyTokenMiddleware, requirePermission('manageTeam'), asyn
 });
 
 // POST /api/admin/team/role { userId, role } — change a user's role
-router.post('/team/role', verifyTokenMiddleware, requirePermission('manageTeam'), async (req, res) => {
+router.post('/team/role', verifyTokenMiddleware, requirePermission('manageTeam'), auditTrail('CHANGE_ROLE', (req) => req.body?.userId || null), async (req, res) => {
   try {
     const { userId, role } = req.body || {};
     if (!userId || !ASSIGNABLE_ROLES.includes(role)) {
@@ -742,10 +707,7 @@ router.post('/team/role', verifyTokenMiddleware, requirePermission('manageTeam')
 
     let updated = null;
     try {
-      if (db._db) {
-        await db._db.run(`UPDATE users SET role = ? WHERE id = ?`, [role, userId]);
-        updated = await db.getUserById(db._db, userId);
-      }
+      updated = await db.setUserRole(db._db, userId, role);
     } catch (e) {
       console.warn('db update role failed', e);
     }
@@ -768,96 +730,56 @@ router.post('/team/role', verifyTokenMiddleware, requirePermission('manageTeam')
 
 // GET /api/admin/analytics — revenue split (Consultation vs Memberships),
 // active plan counts, appointment stats. RBAC §29: admin + staff only.
+// GET /api/admin/analytics — revenue split (Consultation vs Memberships),
+// active plan counts, appointment stats. Computed from the hydrated store so
+// MongoDB and SQLite modes behave identically.
 router.get('/analytics', verifyTokenMiddleware, requirePermission('viewAnalytics'), async (req, res) => {
   try {
-    const database = db._db;
+    const now = Date.now();
+    const today = new Date().toISOString().slice(0, 10);
+
     const analytics = {
       revenue: { consultation: 0, memberships: 0, gold: 0, premium: 0, total: 0, approvedPaymentsCount: 0 },
       activePlans: { consultation: 0, gold: 0, premium: 0, total: 0 },
-      appointments: { total: 0, booked: 0, completed: 0, cancelled: 0, upcoming: 0 },
+      appointments: { total: store.appointments.size, booked: 0, completed: 0, cancelled: 0, upcoming: 0 },
       paymentsByStatus: { approved: 0, pending: 0, rejected: 0 },
-      customers: { total: 0 },
+      customers: { total: Array.from(store.users.values()).filter((u) => u.role === 'customer').length },
     };
-
     const isMembershipPlanTier = (tier) => tier === 'Gold' || tier === 'Premium';
 
-    if (database) {
-      const now = Date.now();
-      const today = new Date().toISOString().slice(0, 10);
-
-      // Revenue: Consultation sessions are paid one-offs; Gold/Premium are the
-      // membership tiers (scope PDF §9 pricing).
-      const revenueRows = await database.all(`SELECT plan, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total FROM payments WHERE status = 'Approved' GROUP BY plan`);
-      for (const row of revenueRows) {
-        const count = Number(row.n) || 0;
-        const total = Number(row.total) || 0;
-        analytics.revenue.approvedPaymentsCount += count;
-        analytics.revenue.total += total;
-        if (isMembershipPlanTier(row.plan)) {
-          analytics.revenue.memberships += total;
-          if (row.plan === 'Gold') analytics.revenue.gold += total;
-          if (row.plan === 'Premium') analytics.revenue.premium += total;
+    for (const payment of store.payments.values()) {
+      const amount = Number(payment.amount || 0);
+      if (payment.status === 'Approved') {
+        analytics.revenue.approvedPaymentsCount += 1;
+        analytics.revenue.total += amount;
+        if (isMembershipPlanTier(payment.plan)) {
+          analytics.revenue.memberships += amount;
+          if (payment.plan === 'Gold') analytics.revenue.gold += amount;
+          if (payment.plan === 'Premium') analytics.revenue.premium += amount;
         } else {
-          analytics.revenue.consultation += total;
+          analytics.revenue.consultation += amount;
         }
+        analytics.paymentsByStatus.approved += 1;
+      } else if (/reject/i.test(String(payment.status))) {
+        analytics.paymentsByStatus.rejected += 1;
+      } else {
+        analytics.paymentsByStatus.pending += 1;
       }
+    }
 
-      const statusRows = await database.all(`SELECT status, COUNT(*) AS n FROM payments GROUP BY status`);
-      for (const row of statusRows) {
-        const key = String(row.status || '').toLowerCase().includes('approved') ? 'approved'
-          : String(row.status || '').toLowerCase().includes('reject') ? 'rejected' : 'pending';
-        analytics.paymentsByStatus[key] += Number(row.n) || 0;
-      }
+    for (const m of store.memberships.values()) {
+      if (!m || !m.active) continue;
+      if (m.expiresAt && Number(m.expiresAt) < now) continue;
+      analytics.activePlans.total += 1;
+      if (isMembershipPlanTier(m.tier)) analytics.activePlans[String(m.tier).toLowerCase()] += 1;
+      else analytics.activePlans.consultation += 1;
+    }
 
-      // Active plans from persisted memberships that haven't expired
-      const memberRows = await database.all(`SELECT tier, active, expiresAt FROM memberships`);
-      for (const m of memberRows) {
-        if (!m.active) continue;
-        if (m.expiresAt && Number(m.expiresAt) < now) continue;
-        analytics.activePlans.total += 1;
-        if (isMembershipPlanTier(m.tier)) analytics.activePlans[m.tier.toLowerCase()] += 1;
-        else analytics.activePlans.consultation += 1;
-      }
-
-      const apptRows = await database.all(`SELECT status, date, COUNT(*) AS n FROM appointments GROUP BY status, date`);
-      for (const row of apptRows) {
-        const n = Number(row.n) || 0;
-        analytics.appointments.total += n;
-        const status = String(row.status || 'Booked');
-        if (status === 'Completed') analytics.appointments.completed += n;
-        else if (status === 'Cancelled') analytics.appointments.cancelled += n;
-        else analytics.appointments.booked += n;
-        if (status !== 'Cancelled' && status !== 'Completed' && String(row.date) >= today) analytics.appointments.upcoming += n;
-      }
-
-      const customerRow = await database.get(`SELECT COUNT(*) AS n FROM users WHERE role = 'customer'`);
-      analytics.customers.total = Number(customerRow?.n) || 0;
-    } else {
-      // in-memory fallback
-      for (const payment of store.payments.values()) {
-        if (payment.status === 'Approved') {
-          analytics.revenue.approvedPaymentsCount += 1;
-          analytics.revenue.total += Number(payment.amount) || 0;
-          if (isMembershipPlanTier(payment.plan)) analytics.revenue.memberships += Number(payment.amount) || 0;
-          else analytics.revenue.consultation += Number(payment.amount) || 0;
-        }
-        const key = String(payment.status || '').toLowerCase().includes('approved') ? 'approved'
-          : String(payment.status || '').toLowerCase().includes('reject') ? 'rejected' : 'pending';
-        analytics.paymentsByStatus[key] += 1;
-      }
-      for (const membership of store.memberships.values()) {
-        if (!membership || !membership.active) continue;
-        analytics.activePlans.total += 1;
-        if (isMembershipPlanTier(membership.tier)) analytics.activePlans[membership.tier.toLowerCase()] += 1;
-        else analytics.activePlans.consultation += 1;
-      }
-      for (const a of store.appointments.values()) {
-        analytics.appointments.total += 1;
-        if (a.status === 'Completed') analytics.appointments.completed += 1;
-        else if (a.status === 'Cancelled') analytics.appointments.cancelled += 1;
-        else analytics.appointments.booked += 1;
-      }
-      analytics.customers.total = Array.from(store.users.values()).filter((u) => u.role === 'customer').length;
+    for (const a of store.appointments.values()) {
+      if (a.status === 'Completed') { analytics.appointments.completed += 1; continue; }
+      if (a.status === 'Cancelled') { analytics.appointments.cancelled += 1; continue; }
+      analytics.appointments.booked += 1;
+      if (String(a.date) >= today) analytics.appointments.upcoming += 1;
     }
 
     return res.json({ ok: true, analytics });
@@ -882,19 +804,19 @@ function toCsv(rows) {
 // Active Plans snapshot, Appointments summary. Admin + staff only.
 router.get('/analytics/export', verifyTokenMiddleware, requirePermission('exportAnalytics'), async (req, res) => {
   try {
-    const database = db._db;
     const sections = [];
 
     sections.push(['# Shubh Sanjog Matrimony — Analytics Export']);
     sections.push([`# Generated ${new Date().toISOString()}`]);
 
-    // Section 1: Revenue ledger (all payments with status)
+    // Section 1: Revenue ledger (all payments with status) — storage-agnostic
+    // via the shared driver + hydrated store for display names.
     sections.push([]);
     sections.push(['# REVENUE LEDGER (PAYMENTS)']);
     sections.push(['Payment ID', 'Date', 'Customer', 'Plan', 'Category', 'Amount (INR)', 'Status']);
-    const payments = database
-      ? await database.all(`SELECT p.*, u.identifier AS customerIdentifier FROM payments p LEFT JOIN users u ON u.id = p.userId ORDER BY p.createdAt DESC`)
-      : Array.from(store.payments.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).map((p) => ({ ...p, customerIdentifier: (store.users.get(p.userId) || {}).identifier || p.userId }));
+    let payments = [];
+    try { payments = await db.listPayments(db._db); } catch { payments = Array.from(store.payments.values()); }
+    payments = payments.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     let consultationTotal = 0;
     let membershipTotal = 0;
     for (const p of payments) {
@@ -903,7 +825,7 @@ router.get('/analytics/export', verifyTokenMiddleware, requirePermission('export
         if (category === 'Membership') membershipTotal += Number(p.amount) || 0;
         else consultationTotal += Number(p.amount) || 0;
       }
-      sections.push([p.id, new Date(p.createdAt || 0).toISOString(), p.customerIdentifier || '', p.plan || '', category, Number(p.amount) || 0, p.status || 'Pending Verification']);
+      sections.push([p.id, new Date(p.createdAt || 0).toISOString(), store.users.get(p.userId)?.identifier || '', p.plan || '', category, Number(p.amount) || 0, p.status || 'Pending Verification']);
     }
     sections.push([], ['TOTAL APPROVED CONSULTATION', '', '', '', '', consultationTotal], ['TOTAL APPROVED MEMBERSHIPS', '', '', '', '', membershipTotal], ['GRAND TOTAL APPROVED', '', '', '', '', consultationTotal + membershipTotal]);
 
@@ -912,12 +834,11 @@ router.get('/analytics/export', verifyTokenMiddleware, requirePermission('export
     sections.push(['# ACTIVE PLANS']);
     sections.push(['Customer', 'Plan Tier', 'Started', 'Expires', 'Meetings Allowed', 'Meetings Left']);
     const now = Date.now();
-    const memberships = database ? await database.all(`SELECT m.*, u.identifier AS identifier FROM memberships m LEFT JOIN users u ON u.id = m.userId`) : Array.from(store.memberships.entries()).map(([uid, m]) => ({ ...m, identifier: (store.users.get(uid) || {}).identifier || uid }));
-    for (const m of memberships) {
+    for (const m of store.memberships.values()) {
       if (!m.active) continue;
       if (m.expiresAt && Number(m.expiresAt) < now) continue;
       sections.push([
-        m.identifier || '',
+        store.users.get(m.userId)?.identifier || m.userId || '',
         m.tier || '',
         m.startedAt ? new Date(Number(m.startedAt)).toISOString() : '',
         m.expiresAt ? new Date(Number(m.expiresAt)).toISOString() : '',
@@ -930,11 +851,9 @@ router.get('/analytics/export', verifyTokenMiddleware, requirePermission('export
     sections.push([]);
     sections.push(['# APPOINTMENTS']);
     sections.push(['Appointment ID', 'Date', 'Time', 'Type', 'Customer', 'Status']);
-    const appointments = database
-      ? await database.all(`SELECT a.*, u.identifier AS identifier FROM appointments a LEFT JOIN users u ON u.id = a.userId ORDER BY a.date ASC`)
-      : Array.from(store.appointments.values()).map((a) => ({ ...a, identifier: (store.users.get(a.userId) || {}).identifier || a.userId }));
+    const appointments = Array.from(store.appointments.values()).sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
     for (const a of appointments) {
-      sections.push([a.id, a.date || '', a.time || '', a.type || 'Consultation', a.identifier || '', a.status || 'Booked']);
+      sections.push([a.id, a.date || '', a.time || '', a.type || 'Consultation', displayNameOf(a.userId), a.status || 'Booked']);
     }
 
     // `sections` is already a flat list of CSV rows (each push adds one row).
@@ -953,12 +872,100 @@ router.get('/analytics/export', verifyTokenMiddleware, requirePermission('export
 // Notes are staff-only; every staff role may add, viewing requires the same.
 
 router.get('/notes', verifyTokenMiddleware, requireStaffRole, listNotes);
-router.post('/notes', verifyTokenMiddleware, requirePermission('addNotes'), addNote);
+router.post('/notes', verifyTokenMiddleware, requirePermission('addNotes'), auditTrail('ADD_NOTE', (req) => req.body?.targetId || null), addNote);
 
 // --- Contact Us inquiries (Inquiry Management) --------------------------------
 // GET /api/admin/inquiries?status=New|In Progress|Resolved — read the queue.
 router.get('/inquiries', verifyTokenMiddleware, requirePermission('viewQueues'), listInquiries);
 // POST /api/admin/inquiries/status { id, status, adminNote? } — triage an inquiry.
 router.post('/inquiries/status', verifyTokenMiddleware, requirePermission('reviewProfiles'), updateInquiryStatus);
+
+// --- Audit log viewer (privacy spec §31) --------------------------------------
+// ADMIN role ONLY (not RM/staff): every administrative access to or change of
+// user sensitive data is listed here. Supports action / target-user / date
+// range filters. Falls back to the in-memory trail when SQLite is unavailable.
+const AUDIT_ACTIONS = ['VIEW_DOCUMENT', 'VIEW_PROFILE', 'UPDATE_STATUS', 'DELETE_ACCOUNT', 'CHANGE_ROLE', 'ADD_NOTE', 'MANAGE_MATCH'];
+
+router.get('/audit-logs', verifyTokenMiddleware, requireAdmin, async (req, res) => {
+  try {
+    const { action, targetUserId, from, to } = req.query || {};
+    const limit = Math.min(Number(req.query.limit) || 200, 1000);
+    let logs = [];
+    try {
+      logs = await db.listAuditLogsDb(db._db, {
+        targetUserId: targetUserId ? String(targetUserId) : null,
+        action: action ? String(action) : null,
+        from: from ? Date.parse(String(from)) : null,
+        // "to" is inclusive: advance to the end of the selected day.
+        to: to ? Date.parse(String(to)) + 86399999 : null,
+        limit,
+      });
+    } catch (e) {
+      console.warn('audit-logs db read failed, using in-memory trail', e);
+      const fromMs = from ? Date.parse(String(from)) : null;
+      const toMs = to ? Date.parse(String(to)) + 86399999 : null;
+      logs = store.auditLogs
+        .filter((entry) => (!action || entry.action === action))
+        .filter((entry) => (!targetUserId || entry.targetUserId === targetUserId))
+        .filter((entry) => (fromMs == null || Number(entry.createdAt) >= fromMs))
+        .filter((entry) => (toMs == null || Number(entry.createdAt) <= toMs))
+        .slice(-limit)
+        .reverse();
+    }
+
+    // Filter dropdown options: known actions + any distinct actions present.
+    const actions = [...new Set([...AUDIT_ACTIONS, ...store.auditLogs.map((l) => l.action), ...logs.map((l) => l.action)])].sort();
+
+    return res.json({ ok: true, logs, actions });
+  } catch (err) {
+    console.error('audit-logs error', err);
+    return res.status(500).json({ ok: false, error: 'Server error' });
+  }
+});
+
+// --- Admin user management (PRD §3/§4): hard "Delete user profile" ------------
+// Permanently removes the customer and every associated record (profile,
+// documents, appointments, interests, memberships, payments, notes,
+// notifications) from the database. Full-admin only; audited.
+router.delete('/users/:id', verifyTokenMiddleware, requireAdmin, auditTrail('UPDATE_STATUS', (req) => req.params.id), async (req, res) => {
+  try {
+    const userId = String(req.params.id || '');
+    const user = store.users.get(userId) || (await db.getUserById(db._db, userId));
+    if (!user) return res.status(404).json({ ok: false, error: 'User not found' });
+    if (user.id === req.user.id) return res.status(400).json({ ok: false, error: 'You cannot delete your own account' });
+    if ((user.role || 'customer') === 'admin') return res.status(403).json({ ok: false, error: 'Admin accounts cannot be deleted here' });
+
+    const result = await db.deleteUserCascade(db._db, userId);
+    for (const filePath of result.files || []) {
+      try { require('fs').unlink(filePath, () => {}); } catch { /* already gone */ }
+    }
+
+    // Mirror the purge into the hydrated store for immediate effect.
+    store.users.delete(userId);
+    store.profiles.delete(userId);
+    store.shortlists.delete(userId);
+    store.interests.delete(userId);
+    store.memberships.delete(userId);
+    store.appointments.delete(userId);
+    store.matchAssignments.delete(userId);
+    for (const [id, meta] of Array.from(store.documents.entries())) if (meta.userId === userId) store.documents.delete(id);
+    for (const [id, p] of Array.from(store.payments.entries())) if (p.userId === userId) store.payments.delete(id);
+    store.notifications = store.notifications.filter((n) => n.toUserId !== userId && n.fromUserId !== userId);
+    store.interestRequests = store.interestRequests.filter((r) => r.fromUserId !== userId && r.toProfileId !== userId);
+
+    await writeAuditLog({
+      actorId: req.user.id,
+      action: 'DELETE_ACCOUNT',
+      targetUserId: userId,
+      ip: clientIp(req),
+      detail: `Admin permanently deleted user ${user.identifier} and all associated records (${(result.files || []).length} file(s) removed).`,
+    });
+
+    return res.json({ ok: true, message: 'User and all associated data permanently deleted.', removedFiles: (result.files || []).length });
+  } catch (err) {
+    console.error('admin delete user error', err);
+    return res.status(500).json({ ok: false, error: 'Server error' });
+  }
+});
 
 module.exports = router;

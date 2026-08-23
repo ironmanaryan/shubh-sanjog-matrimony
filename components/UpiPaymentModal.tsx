@@ -139,9 +139,18 @@ export default function UpiPaymentModal({ plan, onClose }: UpiPaymentModalProps)
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#2c0d16]/60 p-4" onClick={handleClose}>
       <div className="max-h-[92vh] w-full max-w-xl overflow-y-auto rounded-[28px] border border-[#f1d7a6] bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-start justify-between gap-4">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[#7b102d]">UPI Payment</p>
-            <h2 className="mt-1 text-2xl font-black text-[#2c0d16]">{plan.tier} Membership — ₹{plan.price.toLocaleString('en-IN')}</h2>
+          <div className="flex min-w-0 items-center gap-3">
+            <Image
+              src="/logo.png"
+              alt="Shubh Sanjog Matrimony"
+              width={48}
+              height={48}
+              className="h-10 w-10 shrink-0 rounded-full object-contain ring-1 ring-[#e5c88d]"
+            />
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[#7b102d]">UPI Payment</p>
+              <h2 className="mt-1 text-2xl font-black text-[#2c0d16]">{plan.tier} Membership — ₹{plan.price.toLocaleString('en-IN')}</h2>
+            </div>
           </div>
           <button onClick={handleClose} aria-label="Close payment dialog" className="rounded-full border border-[#f2d9a8] p-2 text-[#7b102d] transition hover:bg-[#fff7ee]">
             <X size={16} />

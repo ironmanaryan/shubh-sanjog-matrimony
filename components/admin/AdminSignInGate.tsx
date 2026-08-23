@@ -1,22 +1,22 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { useEffect, useRef, useState } from 'react';
 import { KeyRound, ShieldAlert, ShieldCheck } from 'lucide-react';
 import OtpInput from '@/components/auth/OtpInput';
 import {
   clearSession,
-  isDev,
   sendOtp,
   verifyOtp,
-  DEV_MASTER_OTP,
 } from '@/lib/auth-client';
 
 const EMPTY_OTP = ['', '', '', '', '', ''];
 const RESEND_SECONDS = 30;
-// Hardcoded dev staff credential (mirrors server ADMIN_IDENTIFIERS default) —
-// lets the panel be opened instantly in development without any setup.
-const DEMO_ADMIN_IDENTIFIER = 'admin@shubhsanjog.com';
+// Designated owner account (granted the ADMIN role on server start — PRD §4).
+// The button below only PREFILLS the identifier; sign-in still requires the
+// real OTP delivered to that account.
+const OWNER_IDENTIFIER = 'aryansadanshiv8@gmail.com';
 
 // Inline admin sign-in card rendered by /admin when no valid staff session
 // exists, so the panel never dead-ends behind a redirect (scope PDF §29).
@@ -115,7 +115,14 @@ export default function AdminSignInGate() {
     <div className="flex min-h-screen items-center justify-center bg-[#fffaf8] px-4 py-12 sm:px-6 lg:px-8">
       <div className="w-full max-w-md rounded-[28px] border border-[#f1d7a6] bg-white p-8 shadow-soft">
         <div className="inline-flex items-center gap-2 rounded-full bg-[#fff1dc] px-3 py-1 text-xs font-bold uppercase tracking-wide text-[#7b102d]">
-          <ShieldCheck size={13} /> Shubh Sanjog
+          <Image
+            src="/logo.png"
+            alt="Shubh Sanjog Matrimony logo"
+            width={48}
+            height={48}
+            className="h-5 w-5 rounded-full object-contain"
+          />
+          Shubh Sanjog
         </div>
 
         <h1 className="mt-4 text-2xl font-black tracking-tight text-[#2c0d16]">Admin sign in</h1>
@@ -157,30 +164,15 @@ export default function AdminSignInGate() {
                 {busy ? 'Sending…' : 'Send OTP'}
               </button>
 
-              {isDev() && (
-                <>
-                  <p className="text-center text-xs font-medium text-[#8a7340]">
-                    Development mode — any identifier works with OTP{' '}
-                    <span className="rounded-md border border-gold-300/70 bg-[#fffaf0] px-1.5 py-0.5 font-mono font-bold text-maroon-700">
-                      {DEV_MASTER_OTP}
-                    </span>{' '}
-                    · use an identifier containing{' '}
-                    <span className="font-mono font-semibold text-maroon-700">&quot;admin&quot;</span> for admin access
-                  </p>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => {
-                      setIdentifier(DEMO_ADMIN_IDENTIFIER);
-                      void sendOtpTo(DEMO_ADMIN_IDENTIFIER);
-                    }}
-                    className="w-full rounded-full border border-[#e5c88d] bg-[#fffaf0] px-5 py-2.5 text-xs font-bold uppercase tracking-wide text-[#8a5a11] transition hover:bg-[#fff3dd] disabled:opacity-70"
-                  >
-                    <ShieldCheck size={13} className="mr-1.5 inline" />
-                    Quick dev sign-in ({DEMO_ADMIN_IDENTIFIER})
-                  </button>
-                </>
-              )}
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setIdentifier(OWNER_IDENTIFIER)}
+                className="w-full rounded-full border border-[#e5c88d] bg-[#fffaf0] px-5 py-2.5 text-xs font-bold uppercase tracking-wide text-[#8a5a11] transition hover:bg-[#fff3dd] disabled:opacity-70"
+              >
+                <ShieldCheck size={13} className="mr-1.5 inline" />
+                Use owner account ({OWNER_IDENTIFIER})
+              </button>
             </>
           ) : (
             <>

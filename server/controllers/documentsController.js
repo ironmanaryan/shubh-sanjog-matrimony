@@ -6,6 +6,20 @@ const { store } = require('../data/store');
 const db = require('../db');
 const { signPayload, verifyPayload, DEFAULT_TTL_SECONDS } = require('../utils/signing');
 const { isStaffRole } = require('../middleware/rbac');
+const { writeAuditLog, clientIp } = require('../utils/audit');
+
+// Privacy §31: whenever a staff member accesses a document that belongs to
+// somebody else (receipts, IDs, photographs…), the access is audit-logged.
+function auditStaffDocumentView(req, meta, via) {
+  if (!req.user || meta.userId === req.user.id || !isStaffRole(req.user.role)) return;
+  writeAuditLog({
+    actorId: req.user.id,
+    action: 'VIEW_DOCUMENT',
+    targetUserId: meta.userId,
+    ip: clientIp(req),
+    detail: `staff viewed document ${meta.id} (${meta.documentType || 'file'}) via ${via}`,
+  }).catch(() => {});
+}
 
 // configure multer storage per-user (used by the route wrapper)
 function createMulterForUser(userId) {
@@ -95,6 +109,7 @@ async function downloadDocument(req, res) {
     if (!canAccessDocument(req.user, meta)) {
       return res.status(403).json({ ok: false, error: 'Access denied' });
     }
+    auditStaffDocumentView(req, meta, `GET /api/documents/${id}`);
     streamDocument(meta, res);
   } catch (err) {
     console.error('downloadDocument', err);
@@ -126,6 +141,7 @@ async function signDocumentUrl(req, res) {
     if (!canAccessDocument(req.user, meta)) {
       return res.status(403).json({ ok: false, error: 'Access denied' });
     }
+    auditStaffDocumentView(req, meta, 'GET /api/documents/:id/sign');
 
     const token = signPayload({ docId: id, userId: req.user.id, purpose: 'document-download' });
     const expiresAt = Date.now() + DEFAULT_TTL_SECONDS * 1000;
@@ -160,6 +176,15 @@ async function downloadSignedDocument(req, res) {
     const grantee = store.users.get(payload.userId);
     if (grantee && !canAccessDocument(grantee, meta)) {
       return res.status(403).json({ ok: false, error: 'Access revoked' });
+    }
+    if (grantee && meta.userId !== grantee.id && isStaffRole(grantee.role)) {
+      writeAuditLog({
+        actorId: grantee.id,
+        action: 'VIEW_DOCUMENT',
+        targetUserId: meta.userId,
+        ip: clientIp(req),
+        detail: `staff consumed signed URL for document ${meta.id} (${meta.documentType || 'file'})`,
+      }).catch(() => {});
     }
     streamDocument(meta, res);
   } catch (err) {

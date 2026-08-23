@@ -2,8 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { fetchJsonWithFallback, requestJson } from '@/lib/api-client';
-import { MOCK_BIODATA } from '@/lib/mock-data';
+import { requestJson } from '@/lib/api-client';
 
 // Biodata sections exactly as scoped (scope PDF §5-§6):
 // Personal Details | Education & Career | Lifestyle | Family | Partner Preferences
@@ -94,6 +93,9 @@ type PreferenceInfo = {
   foodPreference?: string;
   otherRequirements?: string;
   aboutPartner?: string;
+  // Free-text expectations behind "What I am looking for in my partner"
+  // (legacy profiles kept this under `aboutPartner`; migrated on load).
+  partnerExpectationsText?: string;
 };
 
 type BiodataState = {
@@ -124,6 +126,9 @@ type ProfileEnvelope = {
 };
 
 const inputClass = 'w-full rounded-xl border border-[#f2d9a8] bg-[#fffaf3] px-3 py-2 text-sm text-[#2c0d16] outline-none focus:border-[#d4a64a]';
+
+// Character cap for the "What I am looking for in my partner" free-text field.
+const PARTNER_EXPECTATIONS_MAX = 1000;
 
 export default function BiodataStepper({ initial }: { initial?: Partial<BiodataState> }) {
   const [step, setStep] = useState(0);
@@ -157,27 +162,37 @@ export default function BiodataStepper({ initial }: { initial?: Partial<BiodataS
   }
 
   useEffect(() => {
-    // Load the saved profile when a token is present. If the API is
-    // unreachable ("TypeError: Failed to fetch"), fall back silently to the
-    // demo biodata so the stepper still opens fully populated.
+    // Load the SAVED profile from MongoDB when a token is present. New
+    // accounts start with a completely blank form — no demo seed data.
     async function load() {
       const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
       if (!token) return;
-      const { data: envelope } = await fetchJsonWithFallback<ProfileEnvelope>('/profile', {
-        headers: { Authorization: `Bearer ${token}` },
-        mock: { profile: MOCK_BIODATA },
-      });
-      const p = envelope?.profile || {};
-      setReviewStatus(p.status || 'Draft');
-      setReviewNote(p.reviewNote || null);
-      setData((s) => ({
-        personal: { ...s.personal, ...(p.personal || {}) },
-        education: { ...s.education, ...(p.education || {}) },
-        family: { ...s.family, ...(p.family || {}) },
-        preferences: { ...s.preferences, ...(p.preferences || {}) },
-      }));
+      try {
+        const { ok, json } = await requestJson<ProfileEnvelope>('/profile', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!ok) return; // keep the blank form on failure
+        const p = json?.profile || {};
+        // Legacy profiles saved this free-text under `aboutPartner` — carry it
+        // into `partnerExpectationsText` so nothing is lost on load.
+        const prefs = { ...(p.preferences || {}) };
+        if (!prefs.partnerExpectationsText && prefs.aboutPartner) {
+          prefs.partnerExpectationsText = prefs.aboutPartner;
+        }
+        setReviewStatus(p.status || 'Draft');
+        setReviewNote(p.reviewNote || null);
+        setData((s) => ({
+          personal: { ...s.personal, ...(p.personal || {}) },
+          education: { ...s.education, ...(p.education || {}) },
+          family: { ...s.family, ...(p.family || {}) },
+          preferences: { ...s.preferences, ...prefs },
+        }));
+      } catch (e) {
+        console.error('loading saved profile failed', e);
+      }
     }
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function saveStep(): Promise<boolean> {
@@ -495,29 +510,51 @@ export default function BiodataStepper({ initial }: { initial?: Partial<BiodataS
                 <textarea value={data.preferences.otherRequirements || ''} onChange={(e) => update('preferences', 'otherRequirements', e.target.value)} placeholder="Other requirements" rows={2} className={`w-full ${inputClass}`} />
               </div>
               <div className="sm:col-span-2">
-                <label className="mb-1 block text-sm font-semibold">What I am looking for in my partner</label>
-                <textarea value={data.preferences.aboutPartner || ''} onChange={(e) => update('preferences', 'aboutPartner', e.target.value)} placeholder="Describe the qualities and values you are looking for..." rows={3} className={`w-full ${inputClass}`} />
+                <label htmlFor="partner-expectations" className="mb-1 block text-sm font-semibold">
+                  What I am looking for in my partner
+                </label>
+                <textarea
+                  id="partner-expectations"
+                  value={data.preferences.partnerExpectationsText || ''}
+                  onChange={(e) => update('preferences', 'partnerExpectationsText', e.target.value)}
+                  placeholder="Describe any specific qualities, values, family expectations, or preferences that aren't covered above..."
+                  rows={4}
+                  maxLength={PARTNER_EXPECTATIONS_MAX}
+                  className={`w-full ${inputClass}`}
+                />
+                <div
+                  aria-live="polite"
+                  className={`mt-1 text-right text-xs ${
+                    (data.preferences.partnerExpectationsText || '').length >= PARTNER_EXPECTATIONS_MAX
+                      ? 'text-[#b45309]'
+                      : 'text-[#9a8290]'
+                  }`}
+                >
+                  {(data.preferences.partnerExpectationsText || '').length}/{PARTNER_EXPECTATIONS_MAX} characters
+                </div>
               </div>
             </div>
           </div>
         )}
 
-        <div className="mt-6 flex items-center justify-between">
-          <div className="flex gap-2">
-            <button disabled={step === 0} onClick={() => setStep((s) => Math.max(0, s - 1))} className="rounded-lg border px-4 py-2 text-sm disabled:opacity-50">
+        {/* Stacked, full-width buttons on mobile (iPhone SE-safe); original
+            inline row restored from sm up. */}
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:gap-2">
+            <button disabled={step === 0} onClick={() => setStep((s) => Math.max(0, s - 1))} className="w-full rounded-lg border px-6 py-3 text-sm disabled:opacity-50 sm:w-auto sm:px-4 sm:py-2">
               Back
             </button>
-            <button onClick={handleNext} disabled={saving} className="rounded-lg bg-[#7b102d] px-4 py-2 text-sm font-semibold text-white disabled:opacity-70">
+            <button onClick={handleNext} disabled={saving} className="w-full rounded-lg bg-[#7b102d] px-6 py-3 text-sm font-semibold text-white disabled:opacity-70 sm:w-auto sm:px-4 sm:py-2">
               {saving ? 'Saving...' : step === steps.length - 1 ? 'Save Preferences' : 'Save & Next'}
             </button>
           </div>
-          <div className="flex items-center gap-3">
-            <Link href="/customer" className="text-sm text-[#6a4a57]">Cancel</Link>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-3">
+            <Link href="/customer" className="w-full py-2 text-center text-sm text-[#6a4a57] hover:text-[#7b102d] sm:w-auto sm:text-left">Cancel</Link>
             <button
               onClick={handleSubmitForReview}
               disabled={submitting}
               title="Submit your biodata for admin verification"
-              className="rounded-full border border-[#d4a64a] bg-[#fffaf0] px-4 py-2 text-sm font-bold text-[#7b102d] disabled:opacity-70"
+              className="w-full rounded-full border border-[#d4a64a] bg-[#fffaf0] px-4 py-3 text-sm font-bold text-[#7b102d] disabled:opacity-70 sm:w-auto sm:py-2"
             >
               {submitting ? 'Submitting…' : 'Submit for Review'}
             </button>

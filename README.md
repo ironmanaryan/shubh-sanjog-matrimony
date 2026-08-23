@@ -1,14 +1,14 @@
 # Shubh Sanjog Matrimony
 
-A full-stack matrimonial web application for Shubh Sanjog Marriage Bureau built with Next.js 16 (App Router), Tailwind CSS, TypeScript, and a Node.js/Express API with JWT-based auth, SQLite persistence, UPI payment verification, and admin/customer workflows.
+A full-stack matrimonial web application for Shubh Sanjog Marriage Bureau built with Next.js 16 (App Router), Tailwind CSS, TypeScript, and a Node.js/Express API with JWT-based auth, MongoDB persistence, real OTP verification, manual UPI payment verification, and admin/customer workflows.
 
 ## Business Scope (official PDF)
 
-- **Pricing tiers** (single source of truth: SQLite `membership_plans` table, seeded from `server/data/plan-catalog.js`, served at `GET /api/payments/plans`):
+- **Pricing tiers** (single source of truth: MongoDB `membershipplans` collection, seeded from `server/data/plan-catalog.js`, served at `GET /api/payments/plans`):
   - **Consultation Package** — ₹599 (1-on-1 session, appointment booking, slot selection)
   - **Gold Membership** — ₹5,100 (60 days, 3 meetings, up to 20 recommended profiles)
   - **Premium Membership** — ₹11,000 (90 days, 5 meetings, 25–30 recommended profiles, priority assistance)
-- **UPI payments**: customer pays via QR / UPI ID, submits the UTR + receipt screenshot; every payment is tracked in SQLite as *Pending Verification* until an admin verifies it (approval activates the membership).
+- **Manual UPI payments (no payment gateway)**: customer scans the business UPI QR / pays to the UPI ID, submits the UTR + payment screenshot; every payment is stored in MongoDB as *Pending Verification* until an admin verifies the proof and approves it (approval automatically activates the membership tier, validity dates and credits in MongoDB).
 - **Profile review workflow**: Draft → Submitted → Under Review → Approved / Rejected with reviewer notes and notifications.
 - **Privacy**: photos and contact details stay masked until the profile is admin-approved or an interest is accepted (customer toggles can keep them private regardless).
 
@@ -16,13 +16,13 @@ A full-stack matrimonial web application for Shubh Sanjog Marriage Bureau built 
 
 This project includes:
 - Public website UI with DB-driven plan cards ("Get Started" opens UPI checkout)
-- OTP-based passwordless login/registration issuing JWTs
+- Real OTP-based passwordless login/registration issuing JWTs (Twilio / Fast2SMS / MSG91 / SMTP; dev master code outside production)
 - Customer dashboard with membership usage tracking (meetings/profiles/expiry)
 - Biodata builder covering Personal Details, Education & Career, Lifestyle, Family Information, Partner Preferences (+ free-text "What I am looking for in my partner")
 - Secure private file management for Identity/Address Proofs, Educational Certificates, Income Proofs, Photographs, and Horoscope/Kundli (never public URLs — streamed via authenticated endpoints)
 - Recommended matches with preference filters, shortlist, and interest lifecycle
 - Consolidated Admin Panel (`/admin`) with tabs: Overview, Profile Review, Document Verification, UPI Payment Approvals, Matchmaking Assignment
-- SQLite-backed persistence and JWT-protected APIs
+- MongoDB-backed persistence (`process.env.MONGODB_URI`) and JWT-protected APIs
 
 ## Local Development Setup
 
@@ -32,7 +32,17 @@ This project includes:
 npm install
 ```
 
-### 2) Start the backend (Express API)
+### 2) Configure the backend
+
+Copy `server/.env.example` to `server/.env` and set:
+
+- `MONGODB_URI` — MongoDB connection string (all users, profiles, documents, appointments, payments, memberships, OTPs persist here)
+- `JWT_SECRET` — a strong secret
+- `ADMIN_EMAILS` — identifiers force-granted the `admin` role on server boot so `/admin` access works immediately (e.g. `aryansadanshiv8@gmail.com`)
+- `UPI_ID` / `UPI_PAYEE_NAME` — business UPI destination shown on checkout
+- Optional OTP providers: `TWILIO_*`, `FAST2SMS_*`, `MSG91_*`, `SMTP_*`
+
+### 3) Start the backend (Express API)
 
 ```bash
 node server/index.js
@@ -41,7 +51,9 @@ node server/index.js
 The backend runs on:
 - http://localhost:4000
 
-### 3) Start the frontend (Next.js)
+On boot it connects to MongoDB, seeds the canonical plans and promotes the configured admin identifiers to `role: admin`. New customer sign-ups start with a completely fresh profile — no demo data is seeded.
+
+### 4) Start the frontend (Next.js)
 
 ```bash
 npx next dev -H 0.0.0.0 -p 3000
@@ -50,33 +62,19 @@ npx next dev -H 0.0.0.0 -p 3000
 The frontend runs on:
 - http://localhost:3000
 
-### 4) Seed demo data
+## Sign-in
 
-A demo seed script is available in the project:
+There are no demo accounts or hardcoded profiles. Every account is created through Registration → OTP verification:
 
-```bash
-node server/scripts/seed-demo.js
-```
-
-This script creates:
-- 1 admin user
-- 5 customer profiles
-- sample documents and notification data
-
-## Demo Login Credentials
-
-### Admin
-- Email: admin@shubhsanjog.com
-- OTP: 123456
-
-### Test Customer
-- Email: neha.sharma@example.com
-- OTP: generated by the API demo flow (for demo data, the send-otp endpoint returns the actual OTP in the response)
+1. Enter your mobile number (or email) at `/register` or `/login`
+2. Verify the OTP delivered by the configured provider
+3. Outside production with no provider configured, the API returns a dev master code (`123456`) in the response for convenience
+4. Admins: sign in with an identifier listed in `ADMIN_EMAILS`, then open `/admin`
 
 ## Main Routes
 
 ### Frontend
-- `/` — Public home page (plans rendered server-side from SQLite)
+- `/` — Public home page (plans rendered server-side from MongoDB)
 - `/login` — OTP login (issues JWT; admin logins route to `/admin`)
 - `/register` — OTP registration (redirects to biodata builder)
 - `/customer` — Customer dashboard
@@ -133,8 +131,8 @@ node server/scripts/smoke_payments.js   # 32 end-to-end checks (auth, plans ₹5
 ### Backend and Data
 - Express API architecture
 - JWT authentication middleware
-- SQLite persistence for users and profile data
-- Demo demo document storage and status tracking
+- MongoDB persistence (Mongoose) for users, profiles, documents, appointments, payments and memberships
+- Real-time CRUD — every mutation writes to MongoDB inside the request that performs it
 - Notification feed support
 
 ## Client Requirements Checklist for Production
@@ -166,9 +164,8 @@ node server/scripts/smoke_payments.js   # 32 end-to-end checks (auth, plans ₹5
 
 ### Optional Production Enhancements
 - [ ] Real user onboarding and KYC verification
-- [ ] Payment gateway integration
 - [ ] AI-powered matchmaking engine
-- [ ] Real document storage with cloud object storage (AWS S3 / Cloudinary)
+- [ ] Cloud object storage for documents (AWS S3 / Cloudinary)
 - [ ] Admin role management with proper RBAC model
 
 ## Notes

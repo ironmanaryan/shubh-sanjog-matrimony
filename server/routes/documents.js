@@ -25,10 +25,14 @@ router.get('/', verifyTokenMiddleware, listDocuments);
 // captured by the single-segment '/:id' route below.
 router.get('/signed/:id', downloadSignedDocument);
 
-// GET /api/documents/:id/sign (protected) — mint a signed URL for a private file
+// GET /api/documents/:id/sign (protected) — mint a signed URL for a private
+// file. §30 self-data isolation is enforced INSIDE the controller via
+// canAccessDocument() (owner / staff / privacy-released photograph), because a
+// document id is not a user id — a param-vs-principal middleware here would
+// wrongly 403 every legitimate owner request.
 router.get('/:id/sign', verifyTokenMiddleware, signDocumentUrl);
 
-// GET /api/documents/:id (protected)
+// GET /api/documents/:id (protected) — same isolation contract as /sign.
 router.get('/:id', verifyTokenMiddleware, downloadDocument);
 
 module.exports = router;

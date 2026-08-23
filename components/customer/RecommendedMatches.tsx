@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { CameraOff, CheckCircle2, Clock3, Heart, Search, ShieldCheck, XCircle } from 'lucide-react';
+import { compatibilityBadgeClass } from '@/lib/compatibility';
 
 type MatchProfile = {
   id: string;
@@ -22,6 +23,7 @@ type MatchProfile = {
   interestStatus: string | null;
   profileCompletion?: number;
   verifiedBadge?: boolean;
+  matchReasons?: string;
 };
 
 type InterestRequest = {
@@ -346,8 +348,13 @@ export default function RecommendedMatches({ initial }: { initial?: MatchProfile
                     </div>
                   </div>
                   <div className="shrink-0 text-right">
-                    <div className="text-sm font-bold text-[#7b102d]">{p.matchScore}%</div>
-                    <div className="text-[10px] uppercase tracking-wide text-[#6a4a57]">match</div>
+                    <span
+                      className={`inline-block rounded-full px-2.5 py-1 text-xs font-black ${compatibilityBadgeClass(Number(p.matchScore || 0))}`}
+                      title={p.matchReasons || `Scored against your partner preferences`}
+                    >
+                      {Number(p.matchScore || 0)}% Match
+                    </span>
+                    <div className="mt-1 text-[10px] uppercase tracking-wide text-[#6a4a57]">compatibility</div>
                     {typeof p.profileCompletion === 'number' && p.profileCompletion > 0 ? (
                       <div className="mt-1 text-[10px] uppercase tracking-wide text-[#6a4a57]">{p.profileCompletion}% complete</div>
                     ) : null}

@@ -15,6 +15,9 @@ const store = {
   notifications: [],
   appointments: new Map(), // appointmentId -> booking { ... }
   matchAssignments: new Map(), // customerUserId -> [{ candidateId, assignedAt, note }]
+  // Privacy & compliance (§30/§31):
+  auditLogs: [], // [{ id, adminId, action, targetUserId, detail, ipAddress, createdAt }]
+  tokenRevocations: new Map(), // userId -> revokedAt (ms) — JWTs issued earlier are invalid
 };
 
 // Contract plan catalog (scope PDF §9). SEED SOURCE ONLY — the runtime single

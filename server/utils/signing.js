@@ -5,7 +5,9 @@
 const crypto = require('crypto');
 
 const SECRET = process.env.JWT_SECRET || 'dev-secret-please-change';
-const DEFAULT_TTL_SECONDS = 300; // 5 minutes
+// Short-lived signed access (privacy spec §30): documents are never public —
+// a signed URL grants at most 15 minutes of access, configurable via env.
+const DEFAULT_TTL_SECONDS = Number(process.env.SIGNED_URL_TTL_SECONDS || 900);
 
 function b64url(input) {
   return Buffer.from(input).toString('base64url');

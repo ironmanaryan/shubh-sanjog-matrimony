@@ -4,9 +4,17 @@ const { v4: uuidv4 } = require('uuid');
 const multer = require('multer');
 const { store, getPlan, activateMembership, UPI_CONFIG } = require('../data/store');
 const db = require('../db');
+const { writeAuditLog } = require('../utils/audit');
 
-// UPI gateway is a manual-verification placeholder: the customer pays via any UPI
-// app (QR / UPI ID), submits the UTR + receipt screenshot, and an admin approves.
+// Payments (PRD §5): MANUAL UPI ONLY — no third-party payment gateway.
+//   1) Customer scans the business UPI QR (or pays to the UPI ID directly)
+//   2) Customer submits UPI Txn ID / UTR + payment screenshot as proof
+//   3) Payment is stored in MongoDB with status "Pending Verification"
+//   4) Admin reviews the proof in Payment Management and clicks "Approve"
+//   5) Approval automatically activates/extends the membership in MongoDB
+// Canonical tiers (seeded into membership_plans on boot):
+//   Consultation ₹599 · Gold ₹5,100 · Premium ₹11,000
+
 function createMulterForUser(userId) {
   const storage = multer.diskStorage({
     destination: function (req, file, cb) {
@@ -33,6 +41,7 @@ function publicPaymentView(payment) {
     amount: payment.amount,
     upiId: payment.upiId,
     utr: payment.utr,
+    gateway: 'manual_upi',
     status: payment.status || 'Pending Verification',
     rejectionReason: payment.rejectionReason || null,
     receiptName: payment.receiptName || null,
@@ -41,32 +50,50 @@ function publicPaymentView(payment) {
   };
 }
 
+async function notifyUser(toUserId, type, payloadObj) {
+  try {
+    const notification = { id: uuidv4(), toUserId, fromUserId: toUserId, type, payload: JSON.stringify(payloadObj), at: Date.now() };
+    await db.saveNotificationDb(db._db, notification);
+    store.notifications.unshift(notification);
+  } catch (e) {
+    console.warn('notifyUser failed', e);
+  }
+}
+
+async function resolvePlan(tier) {
+  let plan = null;
+  try { plan = await db.getPlanDb(db._db, tier); } catch (e) { console.warn('getPlanDb failed', e); }
+  if (!plan) plan = getPlan(tier);
+  return plan;
+}
+
 async function getPlans(req, res) {
   try {
-    // Single source of truth: the membership_plans table in SQLite
-    let plans = null;
-    if (db._db) {
-      try { plans = await db.listMembershipPlansDb(db._db); } catch (e) { console.warn('listMembershipPlansDb failed', e); }
-    }
-    if (!plans || !plans.length) plans = Object.values(MEMBERSHIP_PACKAGES); // seed catalog fallback
-    return res.json({ ok: true, upiId: UPI_CONFIG.upiId, payeeName: UPI_CONFIG.payeeName, plans });
+    // Single source of truth: the membership_plans table/collection (seeded on boot).
+    let plans = [];
+    try { plans = await db.listMembershipPlansDb(db._db); } catch (e) { console.warn('listMembershipPlansDb failed', e); }
+    return res.json({
+      ok: true,
+      upiId: UPI_CONFIG.upiId,
+      payeeName: UPI_CONFIG.payeeName,
+      plans,
+      payments: { mode: 'manual_upi' },
+    });
   } catch (err) {
     console.error('getPlans', err);
     return res.status(500).json({ ok: false, error: 'Server error' });
   }
 }
 
-// POST /api/payments — multipart: plan, utr, file (receipt)
+// POST /api/payments — multipart: plan, utr, file (receipt/screenshot)
+// Saves the payment record with status "Pending Verification" until an admin
+// verifies the UTR + proof and approves it.
 async function submitPayment(req, res) {
   try {
     const userId = req.user.id;
 
-    // Plan must come from the membership_plans table (fallback: seed catalog)
-    let plan = null;
-    if (db._db) {
-      try { plan = await db.getPlanDb(db._db, req.body?.plan); } catch (e) { console.warn('getPlanDb failed', e); }
-    }
-    if (!plan) plan = getPlan(req.body?.plan);
+    // Plan must come from the plans table (single source of truth)
+    const plan = await resolvePlan(req.body?.plan);
     const utr = String(req.body?.utr || '').trim();
 
     if (!plan) return res.status(400).json({ ok: false, error: 'A valid membership plan is required' });
@@ -97,22 +124,28 @@ async function submitPayment(req, res) {
       receiptName: req.file.originalname,
       receiptMimetype: req.file.mimetype,
       receiptSize: req.file.size,
+      gateway: 'manual_upi',
       status: 'Pending Verification',
       createdAt: Date.now(),
     };
     store.payments.set(payment.id, payment);
 
     try {
-      if (db._db) {
-        await db.savePayment(db._db, payment);
-        await db._db.run(
-          `INSERT INTO notifications (id, toUserId, fromUserId, type, payload, at) VALUES (?, ?, ?, ?, ?, ?);`,
-          [uuidv4(), userId, userId, 'payment_submitted', JSON.stringify({ paymentId: payment.id, plan: plan.tier, amount: plan.price }), Date.now()]
-        );
-      }
+      await db.savePayment(db._db, payment);
+      await notifyUser(userId, 'payment_submitted', { paymentId: payment.id, plan: plan.tier, amount: plan.price });
     } catch (e) {
       console.warn('db save payment failed', e);
     }
+
+    try {
+      await writeAuditLog({
+        actorId: userId,
+        action: 'UPDATE_STATUS',
+        targetUserId: userId,
+        ip: req.ip || '',
+        detail: `Manual UPI payment submitted for ${plan.tier} ₹${plan.price} (UTR ${utr}); awaiting admin verification.`,
+      });
+    } catch (e) { /* audit is best-effort */ }
 
     return res.status(201).json({ ok: true, payment: publicPaymentView(payment) });
   } catch (err) {
@@ -123,12 +156,9 @@ async function submitPayment(req, res) {
 
 async function listMyPayments(req, res) {
   try {
-    // DB is the source of truth for pending approval tracking
-    if (db._db) {
-      const rows = await db._db.all(`SELECT * FROM payments WHERE userId = ? ORDER BY createdAt DESC`, [req.user.id]);
-      return res.json({ ok: true, payments: rows.map(publicPaymentView) });
-    }
-    const mine = Array.from(store.payments.values())
+    let rows = [];
+    try { rows = await db.listPayments(db._db); } catch (e) { rows = Array.from(store.payments.values()); }
+    const mine = rows
       .filter((p) => p.userId === req.user.id)
       .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
       .map(publicPaymentView);

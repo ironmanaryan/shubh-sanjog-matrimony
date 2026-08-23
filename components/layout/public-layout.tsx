@@ -1,8 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { Menu, X, Phone, MapPin, ShieldCheck, ChevronDown, UserRound } from 'lucide-react';
+import Image from 'next/image';
+import { Menu, X, Phone, MapPin, ShieldCheck, ChevronDown, UserRound, HelpCircle, FileText, RotateCcw } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import FloatingWhatsApp from '@/components/layout/FloatingWhatsApp';
 
 const WHATSAPP_URL = 'https://wa.me/919034850873';
 
@@ -17,11 +19,19 @@ function WhatsAppIcon(props: React.SVGProps<SVGSVGElement>) {
 
 const navItems = [
   { label: 'Home', href: '/' },
-  { label: 'About Us', href: '/#about' },
-  { label: 'How It Works', href: '/#how-it-works' },
-  { label: 'Membership Plans', href: '/#plans' },
-  { label: 'Consultation', href: '/#consultation' },
+  { label: 'About Us', href: '/about' },
+  { label: 'How It Works', href: '/how-it-works' },
+  { label: 'Membership Plans', href: '/plans' },
+  { label: 'Consultation', href: '/consultation' },
   { label: 'Contact Us', href: '/contact' },
+];
+
+// "More" dropdown — help & legal pages.
+const moreLinks = [
+  { label: 'FAQ', href: '/faq', icon: HelpCircle },
+  { label: 'Privacy Policy', href: '/privacy', icon: ShieldCheck },
+  { label: 'Terms & Conditions', href: '/terms', icon: FileText },
+  { label: 'Refund / Cancellation Policy', href: '/refund-policy', icon: RotateCcw },
 ];
 
 const viewLinks = [
@@ -32,18 +42,26 @@ const viewLinks = [
 export default function PublicLayout({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [viewsOpen, setViewsOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [legalOpen, setLegalOpen] = useState(false);
   const viewsRef = useRef<HTMLDivElement>(null);
+  const moreRef = useRef<HTMLDivElement>(null);
   const drawerCloseRef = useRef<HTMLButtonElement>(null);
 
-  // Close the "Views" dropdown on outside click or Escape.
+  // Close any open header dropdown on outside click or Escape.
   useEffect(() => {
-    if (!viewsOpen) return;
+    if (!viewsOpen && !moreOpen) return;
     const handlePointerDown = (event: MouseEvent) => {
-      if (viewsRef.current && event.target instanceof Node && viewsRef.current.contains(event.target)) return;
+      if (!(event.target instanceof Node)) return;
+      if (viewsRef.current?.contains(event.target) || moreRef.current?.contains(event.target)) return;
       setViewsOpen(false);
+      setMoreOpen(false);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setViewsOpen(false);
+      if (event.key === 'Escape') {
+        setViewsOpen(false);
+        setMoreOpen(false);
+      }
     };
     document.addEventListener('mousedown', handlePointerDown);
     document.addEventListener('keydown', handleKeyDown);
@@ -51,7 +69,7 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
       document.removeEventListener('mousedown', handlePointerDown);
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [viewsOpen]);
+  }, [viewsOpen, moreOpen]);
 
   // Lock body scroll and support Escape while the mobile drawer is open.
   useEffect(() => {
@@ -72,9 +90,12 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
 
   // Reset drawer state when resizing up to desktop.
   useEffect(() => {
-    const media = window.matchMedia('(min-width: 1024px)');
+    const media = window.matchMedia('(min-width: 1280px)');
     const handleChange = () => {
-      if (media.matches) setMobileOpen(false);
+      if (media.matches) {
+        setMobileOpen(false);
+        setMoreOpen(false);
+      }
     };
     media.addEventListener('change', handleChange);
     return () => media.removeEventListener('change', handleChange);
@@ -87,9 +108,14 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
           {/* Brand */}
           <div className="flex flex-1 justify-start">
             <Link href="/" aria-label="Shubh Sanjog Matrimony home" className="group flex shrink-0 items-center gap-3">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#7b102d] via-[#a91336] to-[#d4a64a] text-base font-bold text-white shadow-md shadow-[#7b102d]/25 transition-transform duration-300 group-hover:scale-105 sm:h-11 sm:w-11 sm:text-lg">
-                S
-              </span>
+              <Image
+                src="/logo.png"
+                alt="Shubh Sanjog Matrimony"
+                width={48}
+                height={48}
+                priority
+                className="h-10 w-10 shrink-0 rounded-full object-contain shadow-md shadow-[#7b102d]/25 ring-1 ring-[#7b102d]/15 transition-transform duration-300 group-hover:scale-105 sm:h-11 sm:w-11"
+              />
               <span className="leading-none">
                 <span className="font-display block whitespace-nowrap text-xl tracking-tight text-[#2c0d16] sm:text-2xl">Shubh Sanjog</span>
                 <span className="mt-1 block text-[10px] font-semibold uppercase tracking-[0.3em] text-[#7b102d]/70">Matrimony</span>
@@ -98,7 +124,7 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
           </div>
 
           {/* Center navigation links */}
-          <nav aria-label="Primary" className="hidden items-center gap-8 lg:flex xl:gap-9">
+          <nav aria-label="Primary" className="hidden items-center gap-5 xl:flex 2xl:gap-7">
             {navItems.map((item) => (
               <Link
                 key={item.label}
@@ -108,17 +134,54 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
                 {item.label}
               </Link>
             ))}
+
+            {/* Help / legal pages dropdown */}
+            <div ref={moreRef} className="relative">
+              <button
+                type="button"
+                aria-haspopup="menu"
+                aria-expanded={moreOpen}
+                onClick={() => {
+                  setMoreOpen((open) => !open);
+                  setViewsOpen(false);
+                }}
+                className="flex items-center gap-1 whitespace-nowrap text-sm font-medium text-[#4a2a35] transition-colors duration-200 hover:text-[#800020]"
+              >
+                More
+                <ChevronDown size={14} className={`transition-transform duration-200 ${moreOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {moreOpen && (
+                <div role="menu" aria-label="More information" className="absolute left-1/2 top-full mt-3 w-64 -translate-x-1/2 overflow-hidden rounded-2xl border border-rose-100 bg-white p-1.5 shadow-xl shadow-[#2c0d16]/10">
+                  {moreLinks.map(({ label, href, icon: Icon }) => (
+                    <Link
+                      key={href}
+                      role="menuitem"
+                      href={href}
+                      onClick={() => setMoreOpen(false)}
+                      className="flex items-start gap-2.5 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm font-medium text-[#4a2a35] transition-colors duration-150 hover:bg-rose-50 hover:text-[#800020]"
+                    >
+                      <Icon size={15} className="mt-0.5 shrink-0 text-[#b08a95]" />
+                      <span className="leading-snug">{label}</span>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
           </nav>
 
           {/* Right CTA group */}
           <div className="flex flex-1 items-center justify-end gap-2.5">
             {/* Secondary demo/demo views dropdown (kept out of the primary CTAs) */}
-            <div ref={viewsRef} className="relative hidden lg:block">
+            <div ref={viewsRef} className="relative hidden xl:block">
               <button
                 type="button"
                 aria-haspopup="menu"
                 aria-expanded={viewsOpen}
-                onClick={() => setViewsOpen((open) => !open)}
+                onClick={() => {
+                  setViewsOpen((open) => !open);
+                  setMoreOpen(false);
+                }}
                 className="flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-2 text-sm font-medium text-[#8a6a75] transition-colors duration-200 hover:text-[#800020]"
               >
                 Views
@@ -150,19 +213,21 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
               )}
             </div>
 
-            <span aria-hidden="true" className="mx-1 hidden h-5 w-px bg-rose-100 lg:block" />
+            <span aria-hidden="true" className="mx-1 hidden h-5 w-px bg-rose-100 xl:block" />
 
             <Link
               href="/login"
-              className="hidden whitespace-nowrap rounded-full border border-[#800020]/25 px-5 py-2.5 text-sm font-semibold text-[#800020] transition-all duration-200 hover:border-[#800020]/60 hover:bg-[#800020]/[0.04] lg:inline-flex"
+              className="hidden whitespace-nowrap rounded-full border border-[#800020]/25 px-5 py-2.5 text-sm font-semibold text-[#800020] transition-all duration-200 hover:border-[#800020]/60 hover:bg-[#800020]/[0.04] xl:inline-flex"
             >
               Login
             </Link>
             <Link
               href="/register"
-              className="hidden whitespace-nowrap rounded-full bg-[#800020] px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-[#800020]/25 transition-all duration-300 hover:-translate-y-0.5 hover:bg-[#68001a] hover:shadow-lg hover:shadow-[#800020]/30 lg:inline-flex"
+              aria-label="Registration / Customer Access"
+              title="Registration / Customer Access"
+              className="hidden whitespace-nowrap rounded-full bg-[#800020] px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-[#800020]/25 transition-all duration-300 hover:-translate-y-0.5 hover:bg-[#68001a] hover:shadow-lg hover:shadow-[#800020]/30 xl:inline-flex"
             >
-              Register
+              Registration
             </Link>
 
             {/* Hamburger trigger */}
@@ -172,7 +237,7 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
               aria-controls="mobile-nav-drawer"
               aria-expanded={mobileOpen}
               onClick={() => setMobileOpen(true)}
-              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-rose-100 bg-white text-[#800020] transition-colors duration-200 hover:border-[#800020]/30 hover:bg-rose-50 lg:hidden"
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-rose-100 bg-white text-[#800020] transition-colors duration-200 hover:border-[#800020]/30 hover:bg-rose-50 xl:hidden"
             >
               <Menu size={20} />
             </button>
@@ -184,7 +249,7 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
       <div
         aria-hidden="true"
         onClick={() => setMobileOpen(false)}
-        className={`fixed inset-0 z-[60] bg-[#2c0d16]/45 backdrop-blur-sm transition-opacity duration-300 ease-out lg:hidden ${
+        className={`fixed inset-0 z-[60] bg-[#2c0d16]/45 backdrop-blur-sm transition-opacity duration-300 ease-out xl:hidden ${
           mobileOpen ? 'opacity-100' : 'pointer-events-none opacity-0'
         }`}
       />
@@ -196,15 +261,19 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
         aria-modal="true"
         aria-label="Site navigation"
         inert={!mobileOpen}
-        className={`fixed inset-y-0 right-0 z-[70] flex w-[86%] max-w-xs flex-col bg-white shadow-2xl shadow-[#2c0d16]/25 transition-transform duration-300 ease-out lg:hidden ${
+        className={`fixed inset-y-0 right-0 z-[70] flex w-[86%] max-w-xs flex-col bg-white shadow-2xl shadow-[#2c0d16]/25 transition-transform duration-300 ease-out xl:hidden ${
           mobileOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
       >
         <div className="flex items-center justify-between border-b border-rose-100 px-5 py-4">
           <span className="flex items-center gap-2.5">
-            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-[#7b102d] via-[#a91336] to-[#d4a64a] text-sm font-bold text-white">
-              S
-            </span>
+            <Image
+              src="/logo.png"
+              alt="Shubh Sanjog Matrimony"
+              width={48}
+              height={48}
+              className="h-9 w-9 rounded-full object-contain ring-1 ring-[#7b102d]/15"
+            />
             <span className="leading-none">
               <span className="block text-base font-black tracking-tight text-[#2c0d16]">Shubh Sanjog</span>
               <span className="mt-0.5 block text-[9px] font-semibold uppercase tracking-[0.28em] text-[#7b102d]/70">Matrimony</span>
@@ -232,25 +301,51 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
               {item.label}
             </Link>
           ))}
+
+          {/* Collapsible Help / legal section */}
+          <button
+            type="button"
+            aria-expanded={legalOpen}
+            onClick={() => setLegalOpen((open) => !open)}
+            className="mt-1 flex w-full items-center justify-between rounded-xl px-4 py-3 text-[15px] font-medium text-[#4a2a35] transition-colors duration-150 hover:bg-rose-50 hover:text-[#800020]"
+          >
+            More
+            <ChevronDown size={16} className={`transition-transform duration-200 ${legalOpen ? 'rotate-180' : ''}`} />
+          </button>
+          {legalOpen && (
+            <div className="ml-6 space-y-0.5 border-l border-rose-100 pl-2">
+              {moreLinks.map(({ label, href, icon: Icon }) => (
+                <Link
+                  key={href}
+                  href={href}
+                  onClick={() => setMobileOpen(false)}
+                  className="flex items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm font-medium text-[#4a2a35] transition-colors duration-150 hover:bg-rose-50 hover:text-[#800020]"
+                >
+                  <Icon size={15} className="shrink-0 text-[#b08a95]" />
+                  {label}
+                </Link>
+              ))}
+            </div>
+          )}
         </nav>
 
-        <div className="mt-auto space-y-4 border-t border-rose-100 px-5 py-5">
-          <div className="grid grid-cols-2 gap-3">
-            <Link
-              href="/login"
-              onClick={() => setMobileOpen(false)}
-              className="inline-flex items-center justify-center rounded-full border border-[#800020]/25 px-4 py-2.5 text-sm font-semibold text-[#800020] transition-colors hover:border-[#800020]/60 hover:bg-[#800020]/[0.04]"
-            >
-              Login
-            </Link>
-            <Link
-              href="/register"
-              onClick={() => setMobileOpen(false)}
-              className="inline-flex items-center justify-center rounded-full bg-[#800020] px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-[#800020]/25 transition-colors hover:bg-[#68001a]"
-            >
-              Register
-            </Link>
-          </div>
+        <div className="mt-auto space-y-3 border-t border-rose-100 px-5 py-5">
+          {/* Primary CTA — full-width, most prominent action */}
+          <Link
+            href="/register"
+            aria-label="Registration / Customer Access"
+            onClick={() => setMobileOpen(false)}
+            className="inline-flex w-full items-center justify-center rounded-full bg-[#800020] px-4 py-3 text-sm font-bold text-white shadow-md shadow-[#800020]/25 transition-colors hover:bg-[#68001a]"
+          >
+            Registration / Customer Access
+          </Link>
+          <Link
+            href="/login"
+            onClick={() => setMobileOpen(false)}
+            className="inline-flex w-full items-center justify-center rounded-full border border-[#800020]/25 px-4 py-2.5 text-sm font-semibold text-[#800020] transition-colors hover:border-[#800020]/60 hover:bg-[#800020]/[0.04]"
+          >
+            Login
+          </Link>
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#b08a95]">Demo access</p>
             <div className="mt-2 flex items-center gap-4">
@@ -271,26 +366,22 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
 
       <main>{children}</main>
 
-      {/* Floating WhatsApp chat widget — fixed bottom-right, site-wide */}
-      <a
-        href={WHATSAPP_URL}
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label="Chat with us on WhatsApp"
-        title="Chat with us on WhatsApp"
-        className="group fixed bottom-6 right-6 z-40 inline-flex items-center gap-2.5 rounded-full bg-[#25D366] py-3.5 pl-4 pr-4 text-sm font-bold text-white shadow-xl shadow-[#25D366]/30 transition-all duration-200 hover:scale-[1.03] hover:bg-[#1fbf5b] sm:pr-5"
-      >
-        <WhatsAppIcon className="h-6 w-6 shrink-0" />
-        <span className="hidden sm:inline">Chat with us</span>
-      </a>
+      {/* Floating WhatsApp chat widget — fixed bottom-right, site-wide.
+          PRD high-priority #2: opens wa.me with a pre-filled, context-aware
+          message (member name + the surface they are on). */}
+      <FloatingWhatsApp />
 
       <footer className="mt-24 border-t border-[#f4d4a1] bg-[#fffdfb]">
         <div className="mx-auto grid max-w-7xl gap-10 px-4 py-12 sm:px-6 lg:grid-cols-[1.2fr_0.8fr_0.8fr] lg:px-8">
           <div>
             <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-[#7b102d] to-[#d4a64a] font-black text-white">
-                S
-              </div>
+              <Image
+                src="/logo.png"
+                alt="Shubh Sanjog Matrimony"
+                width={48}
+                height={48}
+                className="h-11 w-11 rounded-full object-contain shadow-sm ring-1 ring-[#7b102d]/15"
+              />
               <div>
                 <div className="text-xl font-black text-[#2c0d16]">Shubh Sanjog</div>
                 <div className="text-[10px] font-semibold uppercase tracking-[0.27em] text-[#9e6b00]">Matrimony</div>

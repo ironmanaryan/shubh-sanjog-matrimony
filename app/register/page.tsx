@@ -80,9 +80,11 @@ export default function RegisterPage() {
       setOtpSent(true);
       setOtp(EMPTY_OTP);
       otpCompleteRef.current = false;
+      // demoOtp is only ever returned by the server in non-production
+      // environments with no SMS/email provider configured.
       notify(
         result.demoOtp
-          ? `OTP sent to ${identifier}. Your code: ${result.demoOtp}${result.offline ? ' (Demo Mode)' : ''}`
+          ? `OTP sent to ${identifier}. Development code: ${result.demoOtp}`
           : `OTP sent successfully to ${identifier}.`,
         'success'
       );

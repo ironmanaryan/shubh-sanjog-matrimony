@@ -3,3 +3,14 @@ node_modules
 out
 npm-debug.log*
 .DS_Store
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+server/.env
+
+# Runtime data
+server/data/*.sqlite
+server/data/*.sqlite-*
+tsconfig.tsbuildinfo

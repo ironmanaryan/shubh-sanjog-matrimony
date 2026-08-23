@@ -19,10 +19,8 @@ async function toggleShortlist(req, res) {
 
     // persist
     try {
-      if (db._db) {
-        const shortlisted = await db.toggleShortlistDb(db._db, userId, profileId);
-        return res.json({ success: true, ok: true, shortlisted });
-      }
+      const shortlisted = await db.toggleShortlistDb(db._db, userId, profileId);
+      return res.json({ success: true, ok: true, shortlisted });
     } catch (e) {
       console.warn('db shortlist failed', e);
     }
@@ -37,12 +35,10 @@ async function toggleShortlist(req, res) {
 async function getShortlist(req, res) {
   try {
     const userId = req.user.id;
-    // try DB
+    // DB is the source of truth
     try {
-      if (db._db) {
-        const shortlisted = await db.getShortlistDb(db._db, userId);
-        return res.json({ ok: true, shortlisted });
-      }
+      const shortlisted = await db.getShortlistDb(db._db, userId);
+      return res.json({ ok: true, shortlisted });
     } catch (e) {
       console.warn('db get shortlist failed', e);
     }
@@ -126,6 +122,20 @@ function buildSearchResult(targetUserId, user, profile, viewerId) {
   }
 
   const heightInches = heightToInches(personal.height);
+  // PRD high-priority #1: real compatibility score vs the viewer's saved
+  // partner preferences (age, religion/caste, education, location, manglik).
+  const viewerProfile = store.profiles.get(viewerId);
+  const { computeCompatibility } = require('../utils/compatibility');
+  const compatibility = computeCompatibility(viewerProfile?.preferences || {}, {
+    age: calculateAge(personal.dob),
+    religion: personal.religion,
+    caste: personal.caste,
+    highestQualification: education.highestQualification,
+    profession: education.profession,
+    city: personal.city,
+    state: personal.state,
+    manglik: personal.manglikStatus,
+  });
   return {
     id: targetUserId,
     name: personal.firstName ? `${personal.firstName} ${personal.lastName || ''}`.trim() : user?.identifier || targetUserId,
@@ -137,9 +147,11 @@ function buildSearchResult(targetUserId, user, profile, viewerId) {
     caste: personal.caste || '',
     height: personal.height || '',
     heightInches,
+    manglik: personal.manglikStatus || '',
     education: education.highestQualification || '',
     profession: education.profession || '',
-    matchScore: 82 + ((targetUserId.charCodeAt(0) + (personal.firstName || '').length) % 16),
+    matchScore: compatibility.score,
+    matchReasons: compatibility.reasons.join(' · '),
     profileStatus: profile.status || 'Draft',
     profileCompletion: profile.profileCompletion || 0,
     verifiedBadge: profile.status === 'Approved',
@@ -232,11 +244,17 @@ async function expressInterest(req, res) {
     store.interests.set(userId, current);
     try {
       const nid = require('uuid').v4();
-      if (db._db) {
-        await db.addInterestDb(db._db, userId, profileId);
-        await db.saveInterestRequest(db._db, request);
-        await db._db.run(`INSERT INTO notifications (id, toUserId, fromUserId, type, payload, at) VALUES (?, ?, ?, ?, ?, ?);`, [nid, profileId, userId, 'interest_received', JSON.stringify({ requestId: request.id }), Date.now()]);
-      }
+      await db.addInterestDb(db._db, userId, profileId);
+      await db.saveInterestRequest(db._db, request);
+      await db.saveNotificationDb(db._db, {
+        id: nid,
+        toUserId: profileId,
+        fromUserId: userId,
+        type: 'interest_received',
+        payload: JSON.stringify({ requestId: request.id }),
+        at: Date.now(),
+      });
+      store.notifications.unshift({ id: nid, toUserId: profileId, fromUserId: userId, type: 'interest_received', payload: JSON.stringify({ requestId: request.id }), at: Date.now() });
     } catch (e) {
       console.warn('db add interest failed', e);
     }
@@ -288,10 +306,11 @@ async function respondToInterest(req, res) {
     request.respondedAt = Date.now();
 
     try {
-      if (db._db) {
-        await db.saveInterestRequest(db._db, request);
-        await db._db.run(`INSERT INTO notifications (id, toUserId, fromUserId, type, payload, at) VALUES (?, ?, ?, ?, ?, ?);`, [require('uuid').v4(), request.fromUserId, userId, `interest_${status.toLowerCase()}`, '{}', Date.now()]);
-      }
+      const nid = require('uuid').v4();
+      const notification = { id: nid, toUserId: request.fromUserId, fromUserId: userId, type: `interest_${status.toLowerCase()}`, payload: '{}', at: Date.now() };
+      await db.updateInterestRequestDb(db._db, request.id, { status: request.status, respondedAt: request.respondedAt });
+      await db.saveNotificationDb(db._db, notification);
+      store.notifications.unshift(notification);
     } catch (e) {
       console.warn('db respond interest failed', e);
     }

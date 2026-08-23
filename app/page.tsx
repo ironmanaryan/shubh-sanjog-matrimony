@@ -4,8 +4,13 @@ import {
   ArrowRight,
   BriefcaseBusiness,
   CalendarCheck2,
+  CalendarDays,
+  GraduationCap,
+  Heart,
   HeartHandshake,
   Lock,
+  MapPin,
+  Ruler,
   ShieldCheck,
   Sparkles,
   Star,
@@ -47,6 +52,11 @@ const benefits = [
     title: 'Relationship First',
     description: 'We focus on meaningful connections and long-term compatibility rather than quick matches.',
   },
+  {
+    icon: Lock,
+    title: 'Privacy Assured',
+    description: 'Your photos, contact details, and biodata stay confidential — shared only with families you approve.',
+  },
 ];
 
 const steps = [
@@ -65,7 +75,91 @@ const steps = [
     title: 'Meet & Commit',
     description: 'Book consultations and meetings, express interest, and take the next step toward a lifelong bond.',
   },
+  {
+    number: '04',
+    title: 'Celebrate Match',
+    description: 'From roka to the wedding day — celebrate your union with family blessings and begin your new journey.',
+  },
 ];
+
+// ─── Featured profiles (suggested matches) ──────────────────────────────────
+// Static showcase data for the landing page. Avatars are gradient circles with
+// initials — no external or local image assets required.
+type FeaturedProfile = {
+  id: string;
+  name: string;
+  initials: string;
+  gender: 'groom' | 'bride';
+  age: string;
+  height: string;
+  profession: string;
+  qualification: string;
+  location: string;
+  community: string;
+};
+
+const suggestedProfiles: FeaturedProfile[] = [
+  {
+    id: 'rahul-sharma',
+    name: 'Rahul Sharma',
+    initials: 'RS',
+    gender: 'groom',
+    age: '28 Yrs',
+    height: "5'11\"",
+    profession: 'Software Engineer',
+    qualification: 'M.Tech',
+    location: 'Nagpur',
+    community: 'Brahmin',
+  },
+  {
+    id: 'amit-deshmukh',
+    name: 'Amit Deshmukh',
+    initials: 'AD',
+    gender: 'groom',
+    age: '30 Yrs',
+    height: "6'0\"",
+    profession: 'Business Analyst',
+    qualification: 'MBA',
+    location: 'Mumbai',
+    community: 'Maratha',
+  },
+  {
+    id: 'priya-verma',
+    name: 'Priya Verma',
+    initials: 'PV',
+    gender: 'bride',
+    age: '26 Yrs',
+    height: "5'5\"",
+    profession: 'Cyber Security Specialist',
+    qualification: 'B.Tech',
+    location: 'Pune',
+    community: 'Kunbi',
+  },
+  {
+    id: 'sneha-kulkarni',
+    name: 'Sneha Kulkarni',
+    initials: 'SK',
+    gender: 'bride',
+    age: '27 Yrs',
+    height: "5'4\"",
+    profession: 'Assistant Professor',
+    qualification: 'M.Sc',
+    location: 'Nagpur',
+    community: 'Brahmin',
+  },
+];
+
+// Gender-themed avatar gradients: royal maroon for grooms, warm gold for brides.
+const avatarStyles: Record<FeaturedProfile['gender'], { avatar: string; chip: string }> = {
+  groom: {
+    avatar: 'bg-gradient-to-br from-royal-deep via-royal to-royal-soft text-luxe-gold-soft ring-luxe-gold/50',
+    chip: 'bg-royal/[0.08] text-royal',
+  },
+  bride: {
+    avatar: 'bg-gradient-to-br from-gold-200 via-gold-400 to-gold-600 text-[#4b0d1d] ring-gold-500/40',
+    chip: 'bg-gold-100 text-gold-700',
+  },
+};
 
 export default async function HomePage() {
   const plans = await getMembershipPlans();
@@ -81,7 +175,7 @@ export default async function HomePage() {
 
         {/* Symmetrical 2-column grid: equal-width tracks, both cells stretching
             to one shared row height so the frame aligns flush with the copy. */}
-        <div className="relative mx-auto grid max-w-7xl items-stretch gap-12 px-4 pb-16 pt-14 sm:px-6 sm:pt-16 lg:grid-cols-2 lg:gap-12 lg:pb-24 lg:pt-24 xl:gap-14">
+        <div className="relative mx-auto grid max-w-7xl items-stretch gap-8 px-4 pb-10 pt-8 sm:gap-12 sm:px-6 sm:pb-16 sm:pt-14 lg:grid-cols-2 lg:gap-12 lg:pb-24 lg:pt-24 xl:gap-14">
           {/* Left column — copy (vertically centred against the imagery) */}
           <div className="order-2 flex flex-col justify-center lg:order-1">
             <Reveal>
@@ -159,8 +253,9 @@ export default async function HomePage() {
           </div>
 
           {/* Right column — traditional Indian bride & groom in royal wedding
-              attire; the frame stretches to match the copy column exactly. */}
-          <Reveal delay={180} className="order-1 h-full lg:order-2">
+              attire. Height-capped on phones/tablets so the photo takes less
+              vertical space; stretches flush with the copy from lg up. */}
+          <Reveal delay={180} className="order-1 my-2 max-h-[320px] sm:max-h-[420px] lg:order-2 lg:my-0 lg:h-full">
             <div className="relative mx-auto flex h-full w-full max-w-md flex-col justify-center sm:max-w-lg lg:max-w-none">
               {/* soft gold-maroon aura behind the frame */}
               <div
@@ -169,7 +264,9 @@ export default async function HomePage() {
               />
 
               <figure className="card-hover relative m-0 h-full w-full overflow-hidden rounded-[36px] border border-luxe-gold/60 bg-luxe-cream shadow-luxe">
-                <div className="relative aspect-[4/5] w-full sm:aspect-[4/5] lg:aspect-auto lg:h-full lg:min-h-[540px]">
+                {/* Mobile: capped height so the photo never eats the whole
+                    viewport; desktop: stretch flush with the copy column. */}
+                <div className="relative mx-auto aspect-[4/5] max-h-[320px] w-full sm:max-h-[420px] lg:max-h-none lg:aspect-auto lg:h-full lg:min-h-[540px]">
                   <Image
                     src={HERO_IMAGE}
                     alt="Traditional Indian bride in a regal red lehenga beside the groom in an embroidered cream sherwani and maroon safa"
@@ -224,17 +321,18 @@ export default async function HomePage() {
           </p>
         </Reveal>
 
-        {/* Strict straight rows: equal-height cards, 2 aligned columns on
-            tablets, single column on mobile with clean vertical rhythm. */}
-        <div className="grid grid-cols-1 items-stretch gap-6 sm:grid-cols-2 lg:grid-cols-3 lg:gap-8">
+        {/* Responsive card grid: 2×2 on phones, single row of four from md up.
+            Equal-height cards with clean rhythm at every breakpoint. */}
+        <div className="grid grid-cols-2 items-stretch gap-4 sm:gap-6 md:grid-cols-4 lg:gap-8">
           {benefits.map(({ icon: Icon, title, description }, index) => (
             <Reveal key={title} delay={index * 130} className="h-full">
-              <article className="card-hover group flex h-full flex-col rounded-[28px] border border-[#f2d8a8] bg-white p-7 shadow-soft">
-                <div className="mb-5 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[#fff2d4] to-[#f9e3b3] text-[#7b102d] shadow-sm transition-transform duration-300 ease-out group-hover:scale-110">
-                  <Icon size={24} />
+              <article className="card-hover group flex h-full flex-col rounded-[28px] border border-[#f2d8a8] bg-white p-5 shadow-soft sm:p-7">
+                <div className="mb-4 inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-[#fff2d4] to-[#f9e3b3] text-[#7b102d] shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 sm:mb-5 sm:h-14 sm:w-14">
+                  <Icon size={22} className="sm:hidden" />
+                  <Icon size={24} className="hidden sm:block" />
                 </div>
-                <h3 className="font-display text-xl font-bold leading-snug text-[#2c0d16]">{title}</h3>
-                <p className="mt-3 flex-1 text-sm leading-7 text-[#5a3743]">{description}</p>
+                <h3 className="font-display text-lg font-bold leading-snug text-[#2c0d16] sm:text-xl">{title}</h3>
+                <p className="mt-2 flex-1 text-xs leading-6 text-[#5a3743] sm:mt-3 sm:text-sm sm:leading-7">{description}</p>
               </article>
             </Reveal>
           ))}
@@ -252,21 +350,130 @@ export default async function HomePage() {
             </h2>
           </Reveal>
 
-          {/* Same strict grid contract: equal heights, 2 columns on tablets. */}
-          <div className="grid grid-cols-1 items-stretch gap-6 sm:grid-cols-2 lg:grid-cols-3 lg:gap-8">
+          {/* Responsive grid contract: 2×2 on phones, one row of four from md
+              up — equal heights and clean rhythm at every breakpoint. */}
+          <div className="grid grid-cols-2 items-stretch gap-4 sm:gap-6 md:grid-cols-4 lg:gap-8">
             {steps.map((step, index) => (
               <Reveal key={step.number} delay={index * 140} className="h-full">
-                <article className="card-hover group flex h-full flex-col rounded-[30px] border border-[#f3dfab] bg-white p-7 shadow-soft">
-                  <div className="mb-5 inline-flex w-fit items-center justify-center rounded-full bg-gradient-to-r from-[#7b102d] to-[#a91336] px-4 py-1.5 text-sm font-black tracking-wide text-luxe-gold-soft shadow-sm transition-transform duration-300 ease-out group-hover:scale-110">
+                <article className="card-hover group flex h-full flex-col rounded-[30px] border border-[#f3dfab] bg-white p-5 shadow-soft sm:p-7">
+                  <div className="mb-4 inline-flex w-fit items-center justify-center rounded-full bg-gradient-to-r from-[#7b102d] to-[#a91336] px-3.5 py-1 text-xs font-black tracking-wide text-luxe-gold-soft shadow-sm transition-transform duration-300 ease-out group-hover:scale-110 sm:mb-5 sm:px-4 sm:py-1.5 sm:text-sm">
                     {step.number}
                   </div>
-                  <h3 className="font-display text-2xl font-bold leading-snug text-[#2c0d16]">{step.title}</h3>
-                  <p className="mt-4 flex-1 text-sm leading-7 text-[#5a3743]">{step.description}</p>
+                  <h3 className="font-display text-lg font-bold leading-snug text-[#2c0d16] sm:text-2xl">{step.title}</h3>
+                  <p className="mt-3 flex-1 text-xs leading-6 text-[#5a3743] sm:mt-4 sm:text-sm sm:leading-7">{step.description}</p>
                 </article>
               </Reveal>
             ))}
           </div>
         </div>
+      </section>
+
+      {/* ─── Featured profiles / suggested matches ──────────────────────────── */}
+      <section id="profiles" className="scroll-mt-header mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">
+        <Reveal className="mx-auto mb-12 max-w-2xl text-center">
+          <div className="inline-flex items-center gap-2 rounded-full border border-[#e9d8a4] bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.25em] text-[#7b102d]">
+            <Sparkles size={14} />
+            Suggested matches
+          </div>
+          <h2 className="mt-5 font-display text-3xl leading-tight tracking-[-0.02em] text-[#2c0d16] sm:text-4xl lg:text-5xl">
+            Featured profiles, chosen with care.
+          </h2>
+          <p className="mt-4 text-base leading-7 text-[#5a3743]">
+            A glimpse of our verified members — handpicked suggestions that reflect the quality of matches waiting
+            for you inside.
+          </p>
+        </Reveal>
+
+        {/* 1-column stack on mobile → 2×2 grid from md up. */}
+        <div className="grid grid-cols-1 items-stretch gap-6 md:grid-cols-2">
+          {suggestedProfiles.map((profile, index) => {
+            const theme = avatarStyles[profile.gender];
+            return (
+              <Reveal key={profile.id} delay={index * 130} className="h-full">
+                <article className="group relative flex h-full flex-col overflow-hidden rounded-[28px] border border-[#f2d8a8] bg-white p-5 shadow-soft transition-all duration-300 transform hover:-translate-y-2 hover:shadow-xl hover:border-maroon-500 sm:p-7">
+                  {/* gold hairline accent across the card top */}
+                  <div aria-hidden="true" className="gold-rule absolute inset-x-0 top-0 h-px opacity-60" />
+
+                  {/* Identity row: initials avatar + name + role chip + badges */}
+                  <div className="flex items-center gap-4 sm:gap-5">
+                    <div
+                      aria-hidden="true"
+                      className={`flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-gradient-to-br font-display text-lg font-bold shadow-luxe-sm ring-2 ring-offset-2 transition-transform duration-300 ease-out group-hover:scale-105 sm:h-[72px] sm:w-[72px] sm:text-xl ${theme.avatar}`}
+                    >
+                      {profile.initials}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                        <h3 className="font-display text-xl font-bold text-[#2c0d16] sm:text-2xl">{profile.name}</h3>
+                        <span
+                          className={`rounded-full px-2.5 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] ${theme.chip}`}
+                        >
+                          {profile.gender}
+                        </span>
+                      </div>
+                      <p className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-semibold text-[#6f4a57] sm:text-sm">
+                        <span className="inline-flex items-center gap-1.5">
+                          <CalendarDays size={14} className="text-luxe-gold-deep" />
+                          {profile.age}
+                        </span>
+                        <span className="inline-flex items-center gap-1.5">
+                          <Ruler size={14} className="text-luxe-gold-deep" />
+                          {profile.height}
+                        </span>
+                      </p>
+                      <div className="mt-2.5 flex flex-wrap gap-2">
+                        <span className="rounded-full border border-luxe-gold/60 bg-luxe-cream px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-royal">
+                          {profile.community}
+                        </span>
+                        <span className="inline-flex items-center gap-1 rounded-full border border-royal/15 bg-royal/[0.05] px-3 py-1 text-[11px] font-bold uppercase tracking-wide text-royal">
+                          <ShieldCheck size={11} />
+                          Verified
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Detail rows */}
+                  <ul className="mt-5 space-y-2.5 border-t border-dashed border-luxe-gold/40 pt-5 text-sm text-[#5a3743] sm:mt-6 sm:pt-6">
+                    <li className="flex items-center gap-2.5">
+                      <BriefcaseBusiness size={15} className="shrink-0 text-luxe-gold-deep" />
+                      <span className="font-semibold text-[#2c0d16]">{profile.profession}</span>
+                    </li>
+                    <li className="flex items-center gap-2.5">
+                      <GraduationCap size={15} className="shrink-0 text-luxe-gold-deep" />
+                      <span>{profile.qualification}</span>
+                    </li>
+                    <li className="flex items-center gap-2.5">
+                      <MapPin size={15} className="shrink-0 text-luxe-gold-deep" />
+                      <span>{profile.location}</span>
+                    </li>
+                  </ul>
+
+                  {/* CTAs — funnel into the registration/login flow */}
+                  <div className="mt-auto flex gap-3 pt-6">
+                    <Button href="/login" variant="outline" size="sm" className="flex-1">
+                      View Profile
+                    </Button>
+                    <Button href="/register" variant="primary" size="sm" className="flex-1">
+                      <Heart size={14} />
+                      Express Interest
+                    </Button>
+                  </div>
+                </article>
+              </Reveal>
+            );
+          })}
+        </div>
+
+        <Reveal delay={200}>
+          <p className="mt-10 text-center text-sm text-[#6f4a57]">
+            These are just a few of our 12,000+ verified members.{' '}
+            <Link href="/register" className="font-semibold text-royal underline-offset-4 transition hover:text-royal-deep hover:underline">
+              Register free
+            </Link>{' '}
+            to unlock full profiles and personalized matches.
+          </p>
+        </Reveal>
       </section>
 
       <section id="plans" className="scroll-mt-header mx-auto max-w-7xl px-4 py-20 sm:px-6 lg:px-8">

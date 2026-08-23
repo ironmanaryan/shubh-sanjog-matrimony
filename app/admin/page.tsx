@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   BarChart3,
@@ -8,9 +9,11 @@ import {
   CreditCard,
   Download,
   FileText,
+  Filter,
   HeartHandshake,
   LayoutDashboard,
   Lock,
+  ScrollText,
   ShieldCheck,
   StickyNote,
   UsersRound,
@@ -23,8 +26,9 @@ const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
 // Consolidated admin panel (scope PDF §18–§31): one route with permission-gated
 // tabs — Profile Review, Document Verification, UPI Payment Approvals, Matching
-// Management, Reports & Analytics. RBAC (§29) hides/restricts tabs per role.
-type TabKey = 'overview' | 'profiles' | 'documents' | 'payments' | 'matchmaking' | 'analytics';
+// Management, Reports & Analytics, plus an ADMIN-only Audit Log viewer (§31).
+// RBAC (§29) hides/restricts tabs per role.
+type TabKey = 'overview' | 'profiles' | 'documents' | 'payments' | 'matchmaking' | 'analytics' | 'audit';
 
 type Role = string;
 
@@ -79,7 +83,29 @@ const ALL_TABS: { key: TabKey; label: string; icon: typeof LayoutDashboard }[] =
   { key: 'payments', label: 'UPI Payment Approvals', icon: CreditCard },
   { key: 'matchmaking', label: 'Matching Management', icon: HeartHandshake },
   { key: 'analytics', label: 'Reports & Analytics', icon: BarChart3 },
+  { key: 'audit', label: 'Audit Logs', icon: ScrollText },
 ];
+
+// §31 Audit log entry shape (mirrors the audit_logs table).
+type AuditLogRow = {
+  id: string;
+  adminId: string | null;
+  action: string;
+  targetUserId?: string | null;
+  detail?: string;
+  ipAddress?: string;
+  createdAt: number;
+};
+
+const AUDIT_FILTER_ACTIONS = ['VIEW_DOCUMENT', 'VIEW_PROFILE', 'UPDATE_STATUS', 'DELETE_ACCOUNT', 'CHANGE_ROLE', 'ADD_NOTE', 'MANAGE_MATCH'];
+
+function auditActionStyle(action: string): string {
+  if (action.startsWith('VIEW_')) return 'bg-[#fff1dc] text-[#8a5a11]';
+  if (action === 'DELETE_ACCOUNT') return 'bg-[#ffe5e5] text-[#9b1f2f]';
+  if (action === 'UPDATE_STATUS') return 'bg-[#e7f0ff] text-[#1d4ed8]';
+  if (action === 'CHANGE_ROLE') return 'bg-[#f3e8ff] text-[#6d28d9]';
+  return 'bg-[#f3f4f6] text-[#4b5563]';
+}
 
 type Me = { id: string; identifier: string; role: Role; permissions: Permissions };
 
@@ -308,6 +334,12 @@ export default function AdminPage() {
   // §28 Reports & Analytics
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
 
+  // §31 Audit log viewer (ADMIN-only tab)
+  const [auditLogs, setAuditLogs] = useState<AuditLogRow[]>([]);
+  const [auditActions, setAuditActions] = useState<string[]>(AUDIT_FILTER_ACTIONS);
+  const [auditFilters, setAuditFilters] = useState({ action: '', targetUserId: '', from: '', to: '' });
+  const [auditLoading, setAuditLoading] = useState(false);
+
   // §29 Team & role management
   const [team, setTeam] = useState<TeamMember[]>([]);
 
@@ -501,12 +533,30 @@ export default function AdminPage() {
           const json = await res.json();
           if (res.ok) setAnalytics(json.analytics || null);
         }
+        if (key === 'audit' && me?.role === 'admin') {
+          setAuditLoading(true);
+          try {
+            const params = new URLSearchParams();
+            if (auditFilters.action) params.set('action', auditFilters.action);
+            if (auditFilters.targetUserId.trim()) params.set('targetUserId', auditFilters.targetUserId.trim());
+            if (auditFilters.from) params.set('from', auditFilters.from);
+            if (auditFilters.to) params.set('to', auditFilters.to);
+            const res = await fetch(`${API}/admin/audit-logs?${params.toString()}`, { headers: authHeaders() });
+            const json = await res.json().catch(() => ({}));
+            if (res.ok) {
+              setAuditLogs(json.logs || []);
+              if (Array.isArray(json.actions) && json.actions.length > 0) setAuditActions(json.actions);
+            }
+          } finally {
+            setAuditLoading(false);
+          }
+        }
       } catch (err) {
         console.error(err);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [profileStatusFilter, perms.manageTeam, lastMatchingQuery]
+    [profileStatusFilter, perms.manageTeam, lastMatchingQuery, me?.role, auditFilters]
   );
 
   useEffect(() => {
@@ -590,6 +640,8 @@ export default function AdminPage() {
   const visibleTabs = ALL_TABS.filter(({ key }) => {
     if (key === 'overview') return true;
     if (key === 'analytics') return perms.viewAnalytics;
+    // §31 Audit Logs are restricted to full ADMIN users only.
+    if (key === 'audit') return me?.role === 'admin';
     return perms.viewQueues;
   });
 
@@ -619,7 +671,16 @@ export default function AdminPage() {
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[#7b102d]">Admin panel</p>
-              <h1 className="mt-2 text-3xl font-black tracking-[-0.04em]">Shubh Sanjog Operations</h1>
+              <div className="mt-2 flex items-center gap-3">
+                <Image
+                  src="/logo.png"
+                  alt="Shubh Sanjog Matrimony"
+                  width={48}
+                  height={48}
+                  className="h-11 w-11 shrink-0 rounded-full object-contain shadow-sm ring-1 ring-[#e5c88d]"
+                />
+                <h1 className="text-3xl font-black tracking-[-0.04em]">Shubh Sanjog Operations</h1>
+              </div>
               {/* RBAC §29 — signed-in identity + role */}
               <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
                 <span className="inline-flex items-center gap-1 rounded-full bg-[#fff1dc] px-3 py-1 font-bold uppercase tracking-wide text-[#7b102d]">
@@ -1294,6 +1355,121 @@ export default function AdminPage() {
               ))}
             </section>
           </div>
+        )}
+
+        {/* ---------------- Audit Logs (ADMIN only) ---------------- */}
+        {tab === 'audit' && (
+          me?.role === 'admin' ? (
+            <div className="space-y-5">
+              <div className="rounded-[24px] border border-[#f2d9a8] bg-white p-5 shadow-soft">
+                <h2 className="flex items-center gap-2 text-xl font-black text-[#2c0d16]"><ScrollText size={20} /> Audit logs</h2>
+                <p className="mt-1 text-sm text-[#5a3743]">
+                  Every administrative access to, or change of, customer sensitive data — who did what, to whom, from where, and when.
+                </p>
+
+                {/* Filters */}
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                  <label className="block text-xs font-bold uppercase tracking-wide text-[#7b102d]">
+                    Action
+                    <select
+                      value={auditFilters.action}
+                      onChange={(e) => setAuditFilters((f) => ({ ...f, action: e.target.value }))}
+                      className="mt-1 w-full rounded-xl border border-[#f2d9a8] bg-[#fffaf3] px-3 py-2 text-sm font-medium normal-case text-[#2c0d16]"
+                    >
+                      <option value="">All actions</option>
+                      {auditActions.map((action) => (
+                        <option key={action} value={action}>{action}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="block text-xs font-bold uppercase tracking-wide text-[#7b102d] sm:col-span-2">
+                    Target user ID
+                    <input
+                      value={auditFilters.targetUserId}
+                      onChange={(e) => setAuditFilters((f) => ({ ...f, targetUserId: e.target.value }))}
+                      placeholder="e.g., a1b2c3…"
+                      className="mt-1 w-full rounded-xl border border-[#f2d9a8] bg-[#fffaf3] px-3 py-2 text-sm font-medium normal-case text-[#2c0d16]"
+                    />
+                  </label>
+                  <label className="block text-xs font-bold uppercase tracking-wide text-[#7b102d]">
+                    From date
+                    <input
+                      type="date"
+                      value={auditFilters.from}
+                      onChange={(e) => setAuditFilters((f) => ({ ...f, from: e.target.value }))}
+                      className="mt-1 w-full rounded-xl border border-[#f2d9a8] bg-[#fffaf3] px-3 py-2 text-sm font-medium normal-case text-[#2c0d16]"
+                    />
+                  </label>
+                  <label className="block text-xs font-bold uppercase tracking-wide text-[#7b102d]">
+                    To date
+                    <input
+                      type="date"
+                      value={auditFilters.to}
+                      onChange={(e) => setAuditFilters((f) => ({ ...f, to: e.target.value }))}
+                      className="mt-1 w-full rounded-xl border border-[#f2d9a8] bg-[#fffaf3] px-3 py-2 text-sm font-medium normal-case text-[#2c0d16]"
+                    />
+                  </label>
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    onClick={() => { if (me?.role === 'admin') void loadTab('audit'); }}
+                    disabled={auditLoading}
+                    className="inline-flex items-center gap-2 rounded-full bg-[#7b102d] px-5 py-2 text-sm font-bold text-white transition hover:bg-[#601225] disabled:opacity-60"
+                  >
+                    <Filter size={14} /> {auditLoading ? 'Loading…' : 'Apply filters'}
+                  </button>
+                  <button
+                    onClick={() => setAuditFilters({ action: '', targetUserId: '', from: '', to: '' })}
+                    className="rounded-full border border-[#e5c88d] px-5 py-2 text-sm font-semibold text-[#7b102d] transition hover:bg-[#fff7ee]"
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
+
+              {/* Log table */}
+              <div className="overflow-hidden rounded-[24px] border border-[#f2d9a8] bg-white shadow-soft">
+                {auditLogs.length === 0 ? (
+                  <div className="p-6 text-center text-sm text-[#5a3743]">
+                    {auditLoading ? 'Loading audit trail…' : 'No audit entries match these filters.'}
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[760px] text-left text-sm">
+                      <thead>
+                        <tr className="border-b border-[#f2d8a8] bg-[#fffaf3] text-xs font-black uppercase tracking-wide text-[#7b102d]">
+                          <th className="px-4 py-3">When</th>
+                          <th className="px-4 py-3">Actor</th>
+                          <th className="px-4 py-3">Action</th>
+                          <th className="px-4 py-3">Target user</th>
+                          <th className="px-4 py-3">IP address</th>
+                          <th className="px-4 py-3">Detail</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {auditLogs.map((log) => (
+                          <tr key={log.id} className="border-b border-[#fbeeda] align-top last:border-0 hover:bg-[#fffcf5]">
+                            <td className="whitespace-nowrap px-4 py-3 text-[#4d2c36]">{new Date(log.createdAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</td>
+                            <td className="px-4 py-3 font-mono text-xs text-[#4d2c36]" title={log.adminId || ''}>{(log.adminId || '—').slice(0, 12)}{log.adminId && log.adminId.length > 12 ? '…' : ''}</td>
+                            <td className="px-4 py-3">
+                              <span className={`inline-block whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-black ${auditActionStyle(log.action)}`}>{log.action}</span>
+                            </td>
+                            <td className="px-4 py-3 font-mono text-xs text-[#4d2c36]" title={log.targetUserId || ''}>{log.targetUserId ? `${log.targetUserId.slice(0, 12)}${log.targetUserId.length > 12 ? '…' : ''}` : '—'}</td>
+                            <td className="whitespace-nowrap px-4 py-3 font-mono text-xs text-[#4d2c36]">{log.ipAddress || '—'}</td>
+                            <td className="max-w-[280px] px-4 py-3 text-xs leading-5 text-[#5a3743]">{log.detail || '—'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2.5 rounded-2xl border border-[#f0d9a0] bg-[#fff8e6] px-4 py-3 text-sm font-medium text-[#8a5a11]">
+              <Lock size={16} className="shrink-0" /> Audit logs are restricted to full Admin accounts.
+            </div>
+          )
         )}
       </div>
     </div>

@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { DEV_MASTER_OTP, isDev } from '@/lib/auth-client';
 
 // Premium 6-digit OTP input: paste-the-whole-code support, arrow/backspace
 // navigation, auto-advance, auto-submit on completion.
@@ -103,22 +102,6 @@ export default function OtpInput({
           />
         ))}
       </div>
-      {isDev() && (
-        <p className="mt-2.5 text-xs font-medium text-[#8a7340]">
-          Development mode — use master code{' '}
-          <button
-            type="button"
-            onClick={() => {
-              onChange(DEV_MASTER_OTP.split(''));
-              onComplete?.(DEV_MASTER_OTP);
-            }}
-            className="rounded-md border border-gold-300/70 bg-[#fffaf0] px-1.5 py-0.5 font-mono font-bold text-maroon-700 transition hover:bg-[#fff3d7]"
-          >
-            {DEV_MASTER_OTP}
-          </button>{' '}
-          to sign in instantly.
-        </p>
-      )}
     </div>
   );
 }

@@ -1,6 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import RequestMeetingButton from '@/components/customer/RequestMeetingButton';
+import { buildMeetingRequestMessage } from '@/lib/whatsapp';
+import { getSession } from '@/lib/auth-client';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
@@ -29,6 +32,7 @@ export default function AppointmentBooking() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
+  const [memberName, setMemberName] = useState('');
 
   const loadData = async () => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
@@ -68,9 +72,24 @@ export default function AppointmentBooking() {
     loadData();
   }, []);
 
+  // PRD #2: personalise the WhatsApp meeting request with the member's name.
+  useEffect(() => {
+    setMemberName(getSession().user?.fullName || getSession().user?.identifier || '');
+  }, []);
+
   const selectedDaySlots = useMemo(() => {
     return days.find((day) => day.date === selectedDate)?.slots || [];
   }, [days, selectedDate]);
+
+  const selectedSlotTime = useMemo(
+    () => selectedDaySlots.find((item) => item.id === selectedSlot)?.time || '',
+    [selectedDaySlots, selectedSlot]
+  );
+
+  const waMeetingMessage = useMemo(
+    () => buildMeetingRequestMessage({ name: memberName, date: selectedDate, time: selectedSlotTime, type: bookingType, notes }),
+    [memberName, selectedDate, selectedSlotTime, bookingType, notes]
+  );
 
   const handleBook = async () => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
@@ -166,6 +185,13 @@ export default function AppointmentBooking() {
             <button disabled={saving} onClick={handleBook} className="mt-5 w-full rounded-full bg-[#7b102d] px-4 py-3 text-sm font-bold text-white">
               {saving ? 'Booking...' : 'Confirm booking'}
             </button>
+
+            {/* PRD high-priority #2 — Request Meeting via WhatsApp, pre-filled
+                with the currently selected slot / session type / notes. */}
+            <div className="mt-3">
+              <RequestMeetingButton message={waMeetingMessage} label="Request this slot on WhatsApp" className="w-full" />
+              <p className="mt-2 text-center text-xs text-[#6a4a57]">Opens WhatsApp with your slot details pre-filled.</p>
+            </div>
           </div>
         </div>
       </div>

@@ -1,8 +1,10 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { use, useCallback, useEffect, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowLeft,
   BriefcaseBusiness,
   FileText,
@@ -12,10 +14,14 @@ import {
   Lock,
   ShieldCheck,
   StickyNote,
+  Trash2,
   Users,
+  X,
 } from 'lucide-react';
 import AdminSignInGate from '@/components/admin/AdminSignInGate';
 import { clearSession, getSession, isNetworkError } from '@/lib/auth-client';
+import { buildBiodataPrintHtml } from '@/lib/biodata-print';
+import { Download, Printer } from 'lucide-react';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
@@ -80,6 +86,40 @@ function str(value: unknown): string {
   return value === undefined || value === null || String(value).trim() === '' ? '' : String(value);
 }
 
+// PRD high-priority #3 — open the printable biodata in a new window and hand
+// it to the browser's print dialog ("Save as PDF" produces the export). A
+// hidden-iframe fallback covers strict popup blockers.
+function printBiodata(detail: DetailResponse) {
+  const html = buildBiodataPrintHtml(detail as never, {
+    // about:blank print window can't resolve relative URLs — use absolute.
+    logoUrl: `${window.location.origin}/logo.png`,
+  });
+  const win = window.open('', '_blank', 'noopener,noreferrer,width=900,height=1000');
+  if (win) {
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    // give the popup a beat to lay out images/fonts before the dialog opens
+    setTimeout(() => {
+      try { win.print(); } catch { /* user can print manually from the view */ }
+    }, 350);
+    return;
+  }
+  const frame = document.createElement('iframe');
+  frame.style.position = 'fixed';
+  frame.style.right = '0';
+  frame.style.bottom = '0';
+  frame.style.width = '0';
+  frame.style.height = '0';
+  frame.style.border = '0';
+  document.body.appendChild(frame);
+  frame.srcdoc = html;
+  frame.onload = () => {
+    try { frame.contentWindow?.focus(); frame.contentWindow?.print(); } finally { setTimeout(() => frame.remove(), 5000); }
+  };
+}
+
 function DetailRow({ label, value }: { label: string; value: unknown }) {
   const text = str(value);
   return (
@@ -99,6 +139,41 @@ export default function AdminCustomerDetailPage({ params }: { params: Promise<{ 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [tab, setTab] = useState<TabKey>('overview');
+  // Admin "remove user data" (PRD §3/§4): permanent cascade delete, gated
+  // behind a typed confirmation so it can never fire accidentally.
+  const router = useRouter();
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  const isCustomerAccount = (detail?.customer?.role || 'customer') === 'customer';
+  const canConfirmDelete = confirmText.trim().toUpperCase() === 'DELETE';
+
+  async function handleDeleteUser() {
+    if (!canConfirmDelete || deleting) return;
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setDeleteError('Your session has expired. Please sign in again.');
+      return;
+    }
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      const res = await fetch(`${API}/admin/users/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || 'Could not delete this user');
+      setDeleteOpen(false);
+      router.replace('/admin?deleted=1');
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Deletion failed. Please try again.');
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   // Bootstrap the staff session (same ladder as the main panel): token +
   // /admin/me first, cached admin identity as an offline fallback.
@@ -235,6 +310,20 @@ export default function AdminCustomerDetailPage({ params }: { params: Promise<{ 
               <span className="text-xl font-black leading-none">{completion}%</span>
               <span className="mt-1 text-[9px] font-bold uppercase tracking-[0.16em] text-[#6a4a57]">complete</span>
             </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {/* PRD high-priority #3 — printable / PDF biodata export */}
+              <button
+                onClick={() => detail?.profile && printBiodata(detail)}
+                disabled={!detail?.profile}
+                title={detail?.profile ? 'Open a clean printable biodata (use "Save as PDF" in the print dialog)' : 'Load the customer profile first'}
+                className="inline-flex items-center gap-2 rounded-full bg-[#7b102d] px-4 py-2 text-sm font-bold text-white transition hover:bg-[#601225] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Download size={15} /> Download / Print Biodata
+              </button>
+              <span className="inline-flex items-center gap-1 rounded-full border border-[#e5c88d] bg-white px-3 py-1.5 text-xs font-semibold text-[#8a5a6b]">
+                <Printer size={12} /> A4 · contact details withheld
+              </span>
+            </div>
           </div>
 
           {/* Tabs */}
@@ -342,7 +431,88 @@ export default function AdminCustomerDetailPage({ params }: { params: Promise<{ 
           /* Private admin-only notes */
           <InternalNotesSection customerId={id} canAdd={permissions.addNotes !== false} />
         )}
+
+        {/* Danger zone — admin-only permanent removal (PRD §3/§4) */}
+        {isCustomerAccount && (
+          <section aria-label="Danger zone" className="mt-6 rounded-[24px] border border-[#f3cccc] bg-[#fdf6f6] p-5 shadow-soft">
+            <h2 className="flex items-center gap-2 text-lg font-black text-[#9b1f2f]">
+              <AlertTriangle size={18} /> Danger zone
+            </h2>
+            <p className="mt-1 text-sm leading-6 text-[#5a3743]">
+              Permanently deletes this customer and every associated record — biodata, family details, partner preferences,
+              documents, appointments, matches, memberships and payment records — from MongoDB. Uploaded files are removed from
+              the server. <strong>This cannot be undone.</strong>
+            </p>
+            <button
+              onClick={() => setDeleteOpen(true)}
+              className="mt-4 inline-flex items-center gap-2 rounded-full border border-[#9b1f2f]/40 bg-white px-5 py-2.5 text-sm font-bold text-[#9b1f2f] transition hover:bg-[#9b1f2f] hover:text-white"
+            >
+              <Trash2 size={15} /> Delete user &amp; all data
+            </button>
+          </section>
+        )}
       </div>
+
+      {/* Deletion confirmation modal */}
+      {deleteOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="admin-delete-title"
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-[#2c0d16]/60 p-4 backdrop-blur-sm"
+          onClick={() => { if (!deleting) { setDeleteOpen(false); setConfirmText(''); setDeleteError(''); } }}
+        >
+          <div className="w-full max-w-md rounded-[24px] border border-[#f3cccc] bg-white p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4">
+              <h3 id="admin-delete-title" className="flex items-center gap-2 text-xl font-black text-[#2c0d16]">
+                <AlertTriangle size={20} className="text-[#9b1f2f]" /> Delete {name}?
+              </h3>
+              <button
+                onClick={() => { if (!deleting) { setDeleteOpen(false); setConfirmText(''); setDeleteError(''); } }}
+                aria-label="Close dialog"
+                className="rounded-full border border-[#f2d9a8] p-1.5 text-[#7b102d] transition hover:bg-[#fff7ee]"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <ul className="mt-4 space-y-2 rounded-2xl bg-[#fdf1f1] p-4 text-sm text-[#7a2c39]">
+              <li>• Biodata, family details and partner preferences are erased.</li>
+              <li>• Documents, horoscope and receipts are deleted from our servers.</li>
+              <li>• Appointments, matches and membership records are removed.</li>
+              <li>• The action is audited and irreversible.</li>
+            </ul>
+            <label htmlFor="admin-confirm-delete" className="mt-4 block text-sm font-bold text-[#2c0d16]">
+              Type <span className="rounded-md bg-[#fff1f1] px-1.5 py-0.5 font-mono font-black text-[#9b1f2f]">DELETE</span> to confirm
+            </label>
+            <input
+              id="admin-confirm-delete"
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder="Type DELETE to enable deletion"
+              autoComplete="off"
+              className="mt-2 w-full rounded-xl border border-[#f2d9a8] bg-[#fffaf3] px-3 py-2.5 text-sm tracking-wide"
+            />
+            {deleteError && <div className="mt-3 rounded-xl border border-[#f3cccc] bg-[#fdf1f1] p-3 text-sm font-medium text-[#9b1f2f]">{deleteError}</div>}
+            <div className="mt-5 flex flex-col gap-3 sm:flex-row-reverse">
+              <button
+                onClick={() => void handleDeleteUser()}
+                disabled={!canConfirmDelete || deleting}
+                className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#9b1f2f] px-5 py-3 text-sm font-black text-white transition hover:bg-[#7a1826] disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+              >
+                <Trash2 size={15} />
+                {deleting ? 'Deleting…' : 'Permanently delete user'}
+              </button>
+              <button
+                onClick={() => { if (!deleting) { setDeleteOpen(false); setConfirmText(''); setDeleteError(''); } }}
+                disabled={deleting}
+                className="inline-flex w-full items-center justify-center rounded-full border border-[#e5c88d] px-5 py-3 text-sm font-semibold text-[#7b102d] transition hover:bg-[#fff7ee] disabled:opacity-50 sm:w-auto"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

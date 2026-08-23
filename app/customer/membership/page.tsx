@@ -200,7 +200,7 @@ export default function MembershipCheckoutPage() {
         <div className="mb-6 flex flex-col gap-4 rounded-[28px] border border-[#f1d7a6] bg-white p-5 shadow-soft lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[#7b102d]">Membership</p>
-            <h1 className="mt-2 text-3xl font-black tracking-[-0.04em] text-[#2c0d16]">Choose your plan &amp; pay via UPI</h1>
+            <h1 className="mt-2 text-3xl font-black tracking-[-0.04em] text-[#2c0d16]">Choose your plan</h1>
           </div>
           <Link href="/customer" className="rounded-full bg-[#7b102d] px-4 py-2 text-center text-sm font-semibold text-white">Back to dashboard</Link>
         </div>
@@ -250,12 +250,13 @@ export default function MembershipCheckoutPage() {
           </section>
         )}
 
+        {/* Manual UPI payment — QR + proof submission, verified by our team */}
         <section className="mt-6 grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
           {/* Real UPI QR + payee details */}
           <div className="rounded-[28px] border border-[#f2d9a8] bg-white p-5 shadow-soft">
-            <h2 className="flex items-center gap-2 text-xl font-black text-[#2c0d16]"><Smartphone size={20} /> UPI Payment</h2>
+            <h2 className="flex items-center gap-2 text-xl font-black text-[#2c0d16]"><Smartphone size={20} /> Pay via UPI</h2>
             <p className="mt-2 text-sm text-[#5a3743]">
-              Pay <span className="font-bold">{formatINR(selectedPlan?.price ?? 0)}</span> for the <span className="font-bold">{selectedPlan?.tier}</span> plan using the QR code or UPI ID below, then submit your UTR and receipt.
+              Pay <span className="font-bold">{formatINR(selectedPlan?.price ?? 0)}</span> for the <span className="font-bold">{selectedPlan?.tier}</span> plan using the QR code or UPI ID below, then submit your transaction details for verification.
             </p>
 
             <div className="mt-5 flex flex-col items-center">
@@ -276,7 +277,7 @@ export default function MembershipCheckoutPage() {
 
               <div className="mt-3 flex items-start gap-2 self-stretch rounded-2xl bg-[#fffaf3] p-3 text-xs text-[#5a3743]">
                 <Info size={14} className="mt-0.5 shrink-0 text-[#d4a64a]" />
-                <span>Open GPay / PhonePe / Paytm / BHIM → scan or pay to the UPI ID → note the <strong>12-digit UTR</strong> from your transaction history → submit it here with a screenshot.</span>
+                <span>Open GPay / PhonePe / Paytm / BHIM → scan or pay to the UPI ID → note the <strong>UTR / transaction ID</strong> from your payment app history → submit it here with a screenshot.</span>
               </div>
             </div>
           </div>
@@ -291,7 +292,7 @@ export default function MembershipCheckoutPage() {
               </div>
             ) : null}
 
-            <label className="mt-5 block text-sm font-bold text-[#2c0d16]" htmlFor="utr">UPI UTR / Transaction Reference ID *</label>
+            <label className="mt-5 block text-sm font-bold text-[#2c0d16]" htmlFor="utr">UPI Transaction ID / UTR Reference *</label>
             <input
               id="utr"
               value={utr}
@@ -300,7 +301,7 @@ export default function MembershipCheckoutPage() {
               className="mt-2 w-full rounded-xl border border-[#f2d9a8] bg-[#fffaf3] px-3 py-2.5 text-sm tracking-wide"
             />
 
-            <label className="mt-5 block text-sm font-bold text-[#2c0d16]" htmlFor="receipt">Payment receipt / screenshot * <span className="font-normal text-[#6a4a57]">(image or PDF, max 5 MB)</span></label>
+            <label className="mt-5 block text-sm font-bold text-[#2c0d16]" htmlFor="receipt">Payment screenshot / receipt * <span className="font-normal text-[#6a4a57]">(image or PDF, max 5 MB)</span></label>
             <label htmlFor="receipt" className="mt-2 flex cursor-pointer items-center justify-between rounded-xl border border-dashed border-[#d4a64a] bg-[#fffaf3] px-4 py-4 text-sm text-[#5a3743] transition hover:bg-[#fff7ee]">
               <span className="flex items-center gap-2"><FileUp size={16} className="text-[#7b102d]" />{file ? file.name : 'Choose receipt file…'}</span>
               <ChevronRight size={14} />
