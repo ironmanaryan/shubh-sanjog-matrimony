@@ -67,7 +67,7 @@ export default function LoginPage() {
       setOfflineMode(Boolean(result.offline));
       notify(
         result.demoOtp
-          ? `OTP sent to ${value}. Your code: ${result.demoOtp}${result.offline ? ' (offline mode)' : ''}`
+          ? `OTP sent to ${value}. Your code: ${result.demoOtp}${result.offline ? ' (Demo Mode)' : ''}`
           : `OTP sent successfully to ${value}.`,
         'success'
       );
@@ -262,8 +262,9 @@ export default function LoginPage() {
 
               {offlineMode && (
                 <p className="rounded-xl bg-[#fff8e6] px-3.5 py-2.5 text-xs font-medium text-[#8a5a11]">
-                  API server unreachable — running in offline demo mode. The panel will load with
-                  limited live data.
+                  API server unreachable — running in <strong>Demo Mode</strong>. Enter{' '}
+                  <span className="font-mono font-bold">123456</span> (or any 6-digit code) to sign
+                  in; the dashboard will load with demo data until the API is back online.
                 </p>
               )}
 

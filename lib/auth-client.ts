@@ -2,10 +2,15 @@
 
 // Shared client-side auth helpers for the OTP flow.
 //
-// Resilience contract (dev/demo): when the Express API is unreachable, the UI
-// must never dead-end. In non-production builds a universal master OTP
-// (123456) unlocks a local session so admins and customers can always sign in.
-// Production builds keep the strict server-verified path only.
+// Resilience contract (Demo Mode): when the Express API cannot be reached —
+// network error, 5xx from a dead gateway/proxy, or a request that hangs past
+// the timeout — the UI silently switches to Demo Mode instead of dead-ending
+// with "Cannot reach the authentication service". Demo Mode shows the
+// universal code (123456) on send and accepts ANY 6-digit code at verify
+// time, minting a local demo session (token + profile persisted to
+// localStorage) so admins and customers can always sign in and reach their
+// dashboard. When the real API responds normally, the strict server-verified
+// path is used unchanged.
 
 export const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
@@ -32,6 +37,33 @@ export type OtpSendResult = {
 
 export function isNetworkError(err: unknown): boolean {
   return err instanceof TypeError; // fetch() throws TypeError on network failure
+}
+
+// True when the failure means "the auth service could not be reached": a
+// network error ("TypeError: Failed to fetch") or an aborted/timed-out
+// request (AbortController rejects with a DOMException named "AbortError").
+function isUnreachableError(err: unknown): boolean {
+  if (isNetworkError(err)) return true;
+  return err instanceof DOMException && err.name === 'AbortError';
+}
+
+const AUTH_TIMEOUT_MS = 8000;
+
+// POST JSON with a hard timeout, so a hung request counts as "unreachable"
+// instead of leaving the user stuck on a spinner forever.
+async function postJsonWithTimeout(path: string, body: unknown): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), AUTH_TIMEOUT_MS);
+  try {
+    return await fetch(`${API}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function persistSession(token: string, user: SessionUser) {
@@ -68,22 +100,25 @@ export function looksLikeEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }
 
+// Demo Mode send result — the UI displays this code so the user can sign in
+// while the real API is down.
+function demoSendResult(): OtpSendResult {
+  return { ok: true, offline: true, demoOtp: DEV_MASTER_OTP };
+}
+
 export async function sendOtp(identifier: string): Promise<OtpSendResult> {
   try {
-    const res = await fetch(`${API}/auth/send-otp`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier }),
-    });
+    const res = await postJsonWithTimeout('/auth/send-otp', { identifier });
+    // A 5xx from a reverse proxy/gateway means the API itself is down —
+    // treat it exactly like an unreachable service and use Demo Mode.
+    if (res.status >= 500) return demoSendResult();
     const json = await res.json().catch(() => ({}));
     if (!res.ok) return { ok: false, error: json.error || 'Could not send OTP' };
     return { ok: true, demoOtp: json.demoOtp };
   } catch (err) {
-    // API offline — fall back to the dev master code instead of dead-ending.
-    if (isNetworkError(err)) {
-      if (isDev()) return { ok: true, offline: true, demoOtp: DEV_MASTER_OTP };
-      return { ok: false, error: 'Cannot reach the authentication service. Please try again later.' };
-    }
+    // API offline or timed out — silently switch to Demo Mode instead of
+    // throwing "Cannot reach the authentication service".
+    if (isUnreachableError(err)) return demoSendResult();
     return { ok: false, error: err instanceof Error ? err.message : 'Could not send OTP' };
   }
 }
@@ -97,17 +132,31 @@ export type VerifyOtpDetails = {
   email?: string; // strictly optional — omitted/null when the user skipped it
 };
 
+// Demo Mode login — when the real API cannot be reached, accept any 6-digit
+// code and mint a local session (token + mock profile stored in localStorage)
+// so the user is still logged in and redirected to their dashboard.
+function demoVerify(identifier: string, code: string): VerifyResult {
+  if (!/^\d{6}$/.test(code.trim())) return { ok: false, error: 'Invalid OTP' };
+  const role = roleForIdentifier(identifier);
+  persistSession(`demo.${role}.${Date.now()}`, {
+    id: role === 'admin' ? 'demo-admin' : 'demo-customer',
+    identifier,
+    role,
+    fullName: role === 'admin' ? 'Admin (Demo)' : 'Demo User',
+    offline: true,
+  });
+  return { ok: true, role };
+}
+
 export async function verifyOtp(
   identifier: string,
   code: string,
   details: VerifyOtpDetails = {}
 ): Promise<VerifyResult> {
   try {
-    const res = await fetch(`${API}/auth/verify-otp`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier, code, ...details }),
-    });
+    const res = await postJsonWithTimeout('/auth/verify-otp', { identifier, code, ...details });
+    // API down behind a failing gateway — fall back to Demo Mode.
+    if (res.status >= 500) return demoVerify(identifier, code);
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.token) return { ok: false, error: json.error || 'Invalid OTP' };
 
@@ -115,20 +164,9 @@ export async function verifyOtp(
     persistSession(json.token, user);
     return { ok: true, role: user.role || roleForIdentifier(identifier) };
   } catch (err) {
-    // API offline — in development allow the master OTP to open a local session.
-    if (isNetworkError(err) && isDev() && code === DEV_MASTER_OTP) {
-      const role = roleForIdentifier(identifier);
-      persistSession(`offline.${role}.${Date.now()}`, {
-        id: `offline-${role}`,
-        identifier,
-        role,
-        offline: true,
-      });
-      return { ok: true, role };
-    }
-    if (isNetworkError(err)) {
-      return { ok: false, error: 'Cannot reach the authentication service. Please try again later.' };
-    }
+    // API unreachable or timed out — Demo Mode instead of throwing
+    // "Cannot reach the authentication service".
+    if (isUnreachableError(err)) return demoVerify(identifier, code);
     return { ok: false, error: err instanceof Error ? err.message : 'Login failed' };
   }
 }

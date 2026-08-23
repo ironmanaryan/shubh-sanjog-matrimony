@@ -82,7 +82,7 @@ export default function RegisterPage() {
       otpCompleteRef.current = false;
       notify(
         result.demoOtp
-          ? `OTP sent to ${identifier}. Your code: ${result.demoOtp}${result.offline ? ' (offline mode)' : ''}`
+          ? `OTP sent to ${identifier}. Your code: ${result.demoOtp}${result.offline ? ' (Demo Mode)' : ''}`
           : `OTP sent successfully to ${identifier}.`,
         'success'
       );
