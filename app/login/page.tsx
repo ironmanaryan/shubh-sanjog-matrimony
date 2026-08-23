@@ -49,7 +49,7 @@ export default function LoginPage() {
   const handleSendOtp = async () => {
     const value = identifier.trim();
     if (!value) {
-      notify('Please enter your mobile number or email.', 'error');
+      notify('Please enter your mobile number.', 'error');
       return;
     }
 
@@ -160,12 +160,12 @@ export default function LoginPage() {
             >
               <TextField
                 id="identifier"
-                label="Mobile number or email"
-                type="text"
+                label="Mobile number"
+                type="tel"
                 value={identifier}
                 disabled={otpSent || busy}
                 onChange={(event) => setIdentifier(event.target.value)}
-                placeholder="+91 98765 43210 or you@example.com"
+                placeholder="+91 98765 43210"
               />
 
               {!otpSent ? (
@@ -186,11 +186,11 @@ export default function LoginPage() {
 
                   {isDev() && (
                     <p className="text-center text-xs font-medium text-[#8a7340]">
-                      Development mode — any identifier works with OTP{' '}
+                      Development mode — any mobile number works with OTP{' '}
                       <span className="rounded-md border border-gold-300/70 bg-[#fffaf0] px-1.5 py-0.5 font-mono font-bold text-maroon-700">
                         {DEV_MASTER_OTP}
                       </span>{' '}
-                      · use an email containing{' '}
+                      · use an identifier containing{' '}
                       <span className="font-mono font-semibold text-maroon-700">&quot;admin&quot;</span> for admin access
                     </p>
                   )}
@@ -231,7 +231,7 @@ export default function LoginPage() {
                       }}
                       className="font-semibold text-[#5a3743] transition hover:text-maroon-700"
                     >
-                      Change number / email
+                      Change mobile number
                     </button>
                     <button
                       type="button"

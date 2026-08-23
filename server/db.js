@@ -26,6 +26,12 @@ async function init() {
   if (!hasRoleColumn) {
     await db.exec(`ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'customer';`);
   }
+  // Email is strictly optional (phone + OTP is the primary identity). Nullable
+  // column — multiple NULLs never collide in unique lookups.
+  const hasEmailColumn = tableInfo.some((column) => column.name === 'email');
+  if (!hasEmailColumn) {
+    await db.exec(`ALTER TABLE users ADD COLUMN email TEXT;`);
+  }
 
   await db.exec(`UPDATE users SET role = 'admin' WHERE role IS NULL AND LOWER(identifier) LIKE '%admin%';`);
   await db.exec(`UPDATE users SET role = 'customer' WHERE role IS NULL;`);
@@ -311,6 +317,7 @@ async function hydrateStore(db) {
     store.users.set(user.id, {
       id: user.id,
       identifier: user.identifier,
+      email: user.email || null,
       role: user.role || 'customer',
       createdAt: user.createdAt,
     });
@@ -400,7 +407,7 @@ async function hydrateStore(db) {
 
 async function createUser(db, user) {
   const role = user.role || 'customer';
-  await db.run(`INSERT OR IGNORE INTO users (id, identifier, role, createdAt) VALUES (?, ?, ?, ?);`, [user.id, user.identifier, role, user.createdAt]);
+  await db.run(`INSERT OR IGNORE INTO users (id, identifier, email, role, createdAt) VALUES (?, ?, ?, ?, ?);`, [user.id, user.identifier, user.email ?? null, role, user.createdAt]);
 }
 
 async function getUserByIdentifier(db, identifier) {

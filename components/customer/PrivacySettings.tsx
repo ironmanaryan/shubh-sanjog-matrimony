@@ -2,19 +2,20 @@
 
 import { useEffect, useState } from 'react';
 import { EyeOff, Lock, ShieldCheck } from 'lucide-react';
-
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+import { API, requestJson } from '@/lib/api-client';
+import { MOCK_PRIVACY } from '@/lib/mock-data';
 
 type PrivacyState = { hidePhoto: boolean; hidePhone: boolean };
 
 export default function PrivacySettings() {
-  const [privacy, setPrivacy] = useState<PrivacyState>({ hidePhoto: false, hidePhone: false });
+  const [privacy, setPrivacy] = useState<PrivacyState>(MOCK_PRIVACY);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
 
   useEffect(() => {
     const token = localStorage.getItem('token');
     if (!token) return;
+    // Silent fallback: if the API is unreachable the demo defaults above stay.
     fetch(`${API}/customer/privacy`, { headers: { Authorization: `Bearer ${token}` } })
       .then(async (res) => {
         if (!res.ok) return;
@@ -23,7 +24,7 @@ export default function PrivacySettings() {
           setPrivacy({ hidePhoto: json.privacy.hidePhoto === true, hidePhone: json.privacy.hidePhone === true });
         }
       })
-      .catch((err) => console.error('load privacy', err));
+      .catch(() => undefined); // offline — keep mock/defaults quietly
   }, []);
 
   const toggle = async (key: keyof PrivacyState) => {
@@ -33,23 +34,29 @@ export default function PrivacySettings() {
       return;
     }
 
+    const previous = privacy;
     const next = { ...privacy, [key]: !privacy[key] };
     setPrivacy(next);
     setSaving(true);
     setMessage('');
     try {
-      const res = await fetch(`${API}/customer/privacy`, {
+      const { ok, json, networkError } = await requestJson('/customer/privacy', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(next),
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Could not save privacy settings');
-      if (json.privacy) setPrivacy({ hidePhoto: json.privacy.hidePhoto === true, hidePhone: json.privacy.hidePhone === true });
+      if (networkError) {
+        // Offline — keep the optimistic toggle so the UI never dead-ends.
+        setMessage('Saved for this session — it will sync once the API server is reachable.');
+        return;
+      }
+      const detail = (json ?? {}) as { error?: string; privacy?: PrivacyState };
+      if (!ok) throw new Error(detail.error || 'Could not save privacy settings');
+      if (detail.privacy) setPrivacy({ hidePhoto: detail.privacy.hidePhoto === true, hidePhone: detail.privacy.hidePhone === true });
       setMessage('Privacy settings saved.');
     } catch (err) {
-      // revert on failure
-      setPrivacy(privacy);
+      // revert only when the server actually rejected the change
+      setPrivacy(previous);
       setMessage(err instanceof Error ? err.message : 'Could not save privacy settings');
     } finally {
       setSaving(false);

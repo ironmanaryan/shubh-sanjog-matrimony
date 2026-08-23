@@ -9,7 +9,7 @@ import Button from '@/components/ui/button';
 import GlassCard from '@/components/ui/glass-card';
 import Loader from '@/components/ui/loader';
 import TextField from '@/components/ui/text-field';
-import { sendOtp, verifyOtp, getSession } from '@/lib/auth-client';
+import { sendOtp, verifyOtp, getSession, looksLikeEmail } from '@/lib/auth-client';
 
 const EMPTY_OTP = ['', '', '', '', '', ''];
 
@@ -31,8 +31,9 @@ export default function RegisterPage() {
   const otpCompleteRef = useRef(false);
 
   // OTP registration reuses the same passwordless auth API — the account is
-  // created or retrieved on verify (scope PDF §4).
-  const identifier = form.phone.trim() || form.email.trim();
+  // created or retrieved on verify (scope PDF §4). Phone is the only required
+  // contact; email is strictly optional metadata.
+  const identifier = form.phone.trim();
 
   const handleFieldChange = (key: keyof typeof form, value: string) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -50,16 +51,16 @@ export default function RegisterPage() {
     const phone = form.phone.trim();
     const email = form.email.trim();
 
-    if (!phone && !email) {
-      next.phone = 'Provide a mobile number or an email.';
-      next.email = 'Provide a mobile number or an email.';
-    } else {
-      if (phone && !/^[+]?[\d\s-]{10,15}$/.test(phone)) {
-        next.phone = 'Enter a valid mobile number.';
-      }
-      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        next.email = 'Enter a valid email address.';
-      }
+    // Mobile number is the ONLY required contact — registration works with it alone.
+    if (!phone) {
+      next.phone = 'Please enter your mobile number.';
+    } else if (!/^[+]?[\d\s-]{10,15}$/.test(phone)) {
+      next.phone = 'Enter a valid mobile number.';
+    }
+
+    // Email is strictly optional — validated only when actually provided.
+    if (email && !looksLikeEmail(email)) {
+      next.email = 'Enter a valid email address.';
     }
 
     setErrors(next);
@@ -106,7 +107,10 @@ export default function RegisterPage() {
     otpCompleteRef.current = true;
     setBusy(true);
     try {
-      const result = await verifyOtp(identifier, code);
+      const result = await verifyOtp(identifier, code, {
+        fullName: form.fullName.trim(),
+        email: form.email.trim() || undefined, // optional — omitted when blank
+      });
       if (!result.ok) {
         otpCompleteRef.current = false;
         notify(result.error, 'error');
@@ -147,7 +151,7 @@ export default function RegisterPage() {
           </div>
           <h1 className="mt-4 text-4xl text-[#2c0d16]">Create your profile</h1>
           <p className="mx-auto mt-2.5 max-w-md text-sm leading-6 text-[#5a3743]">
-            Register with your mobile number or email and verify via a one-time code — it takes less than a minute.
+            Register with just your mobile number — we&apos;ll verify it with a one-time code. Email is optional. It takes less than a minute.
           </p>
         </div>
 
@@ -170,10 +174,9 @@ export default function RegisterPage() {
           />
           <TextField
             id="email"
-            label="Email"
+            label="Email (optional)"
             type="email"
             value={form.email}
-            disabled={Boolean(form.phone.trim())}
             onChange={(event) => handleFieldChange('email', event.target.value)}
             placeholder="you@example.com"
             error={errors.email}
@@ -184,11 +187,10 @@ export default function RegisterPage() {
               label="Mobile number"
               type="tel"
               value={form.phone}
-              disabled={Boolean(form.email.trim())}
               onChange={(event) => handleFieldChange('phone', event.target.value)}
               placeholder="+91 98765 43210"
               error={errors.phone}
-              hint={!errors.phone ? "Provide either a mobile number or an email — we'll send your OTP there." : undefined}
+              hint={!errors.phone ? "We'll send your one-time code to this number." : undefined}
             />
           </div>
 

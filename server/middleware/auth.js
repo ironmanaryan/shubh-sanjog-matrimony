@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const { store } = require('../data/store');
+const { matchesAdminIdentifier } = require('./rbac');
 const db = require('../db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-please-change';
@@ -22,7 +23,7 @@ function resolveUserRole(user, decoded = {}) {
   }
   const fromToken = normalizeRole(decoded.role);
   if (fromToken) return fromToken;
-  if (user && typeof user.identifier === 'string' && user.identifier.toLowerCase().includes('admin')) return 'admin';
+  if (user && typeof user.identifier === 'string' && matchesAdminIdentifier(user.identifier)) return 'admin';
   return 'customer';
 }
 

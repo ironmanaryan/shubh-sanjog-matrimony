@@ -1,88 +1,29 @@
 'use client';
 
+import Image from 'next/image';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Copy, FileUp, Info, ShieldCheck, Smartphone, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { CheckCircle2, Copy, FileUp, Info, ShieldCheck, X } from 'lucide-react';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
-const FALLBACK_UPI = { upiId: 'shubhsanjog@upi', payeeName: 'Shubh Sanjog Matrimony' };
+const FALLBACK_UPI = { upiId: 'deepakrajmeh@okaxis', payeeName: 'Shubh Sanjog Matrimony' };
 
-// --- Mock QR placeholder ----------------------------------------------------
-// Deterministic pseudo-QR rendered as SVG (placeholder until a real gateway is wired).
-export function useMockQrMatrix(seed: string, size = 21): boolean[][] {
-  return useMemo(() => {
-    let h = 2166136261 >>> 0;
-    for (let i = 0; i < seed.length; i++) {
-      h ^= seed.charCodeAt(i);
-      h = Math.imul(h, 16777619);
-    }
-    const rand = () => {
-      h ^= h << 13;
-      h ^= h >>> 17;
-      h ^= h << 5;
-      return ((h >>> 0) % 1000) / 1000;
-    };
-
-    const grid: boolean[][] = Array.from({ length: size }, () => Array.from({ length: size }, () => false));
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) grid[y][x] = rand() > 0.52;
-    }
-
-    const drawFinder = (ox: number, oy: number) => {
-      for (let y = -1; y <= 7; y++) {
-        for (let x = -1; x <= 7; x++) {
-          const gy = oy + y;
-          const gx = ox + x;
-          if (gy < 0 || gy >= size || gx < 0 || gx >= size) continue;
-          const inRing = x >= 0 && x <= 6 && y >= 0 && y <= 6;
-          if (!inRing) {
-            grid[gy][gx] = false; // clear separator around finder
-            continue;
-          }
-          const edge = x === 0 || y === 0 || x === 6 || y === 6;
-          const core = x >= 2 && x <= 4 && y >= 2 && y <= 4;
-          grid[gy][gx] = edge || core;
-        }
-      }
-    };
-    drawFinder(0, 0);
-    drawFinder(size - 7, 0);
-    drawFinder(0, size - 7);
-
-    // timing strips between finder patterns
-    for (let i = 8; i < size - 8; i++) {
-      grid[6][i] = i % 2 === 0;
-      grid[i][6] = i % 2 === 0;
-    }
-
-    // keep the alignment area clear near bottom-right
-    for (let y = size - 9; y < size - 4; y++) {
-      for (let x = size - 9; x < size - 4; x++) {
-        if (y >= 0 && x >= 0 && y < size && x < size) grid[y][x] = false;
-      }
-    }
-
-    return grid;
-  }, [seed, size]);
-}
-
-export function MockQrCode({ seed }: { seed: string }) {
-  const matrix = useMockQrMatrix(seed);
-  const cell = 8;
-  const dim = matrix.length * cell;
-
+// --- UPI QR ------------------------------------------------------------------
+// Real UPI QR (encodes upi://pay?pa=deepakrajmeh@okaxis…) shown inside a clean
+// rounded frame. Shared by the payment modal and the membership checkout page.
+export function PaymentQrCode() {
   return (
-    <div className="rounded-3xl border border-[#f2d9a8] bg-white p-3 shadow-sm">
-      <svg viewBox={`0 0 ${dim} ${dim}`} width={176} height={176} role="img" aria-label="UPI QR code placeholder" className="rounded-xl">
-        <rect width={dim} height={dim} fill="#ffffff" />
-        {matrix.map((row, y) =>
-          row.map((on, x) =>
-            on ? <rect key={`${x}-${y}`} x={x * cell} y={y * cell} width={cell} height={cell} fill="#2c0d16" /> : null
-          )
-        )}
-      </svg>
-      <p className="mt-2 text-center text-[10px] font-semibold uppercase tracking-[0.18em] text-[#6a4a57]">Demo QR — scan with any UPI app</p>
+    <div className="rounded-[28px] border border-[#f2d9a8] bg-white p-3 shadow-sm">
+      <Image
+        src="/images/payment-qr.jpg"
+        alt="UPI QR code — scan with any UPI app to pay Shubh Sanjog Matrimony"
+        width={256}
+        height={256}
+        quality={85}
+        className="w-64 h-64 object-cover rounded-2xl border shadow-sm mx-auto"
+      />
+      <p className="mt-2 text-center text-[10px] font-semibold uppercase tracking-[0.18em] text-[#6a4a57]">Scan with any UPI app</p>
     </div>
   );
 }
@@ -229,24 +170,25 @@ export default function UpiPaymentModal({ plan, onClose }: UpiPaymentModalProps)
               </div>
             ) : (
               <form onSubmit={handleSubmit}>
-                <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-                  <MockQrCode seed={`${upi.upiId}|${plan.tier}|${plan.price}`} />
-                  <div className="w-full space-y-3">
-                    <div className="rounded-2xl bg-[#fff8ee] p-4">
-                      <div className="text-xs font-bold uppercase tracking-[0.18em] text-[#7b102d]">Pay to UPI ID</div>
-                      <div className="mt-1 flex items-center justify-between gap-2">
-                        <code className="text-lg font-black text-[#2c0d16]">{upi.upiId}</code>
-                        <button type="button" onClick={handleCopy} className="inline-flex items-center gap-1 rounded-full border border-[#e5c88d] bg-white px-3 py-1.5 text-xs font-bold text-[#7b102d] transition hover:bg-[#fff7ee]">
-                          <Copy size={12} />
-                          {copied ? 'Copied!' : 'Copy'}
-                        </button>
-                      </div>
-                      <div className="mt-1 text-xs text-[#6a4a57]">{upi.payeeName}</div>
-                    </div>
-                    <div className="flex items-start gap-2 rounded-2xl bg-[#fffaf3] p-3 text-xs text-[#5a3743]">
-                      <Info size={14} className="mt-0.5 shrink-0 text-[#d4a64a]" />
-                      <span>Scan the QR or pay via GPay / PhonePe / Paytm, then note the <strong>UTR</strong> from your transaction history and submit it below.</span>
-                    </div>
+                <div className="flex flex-col items-center">
+                  <PaymentQrCode />
+
+                  {/* UPI ID directly under the QR for easy copy-pasting */}
+                  <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                    <span className="text-sm text-[#5a3743]">
+                      <strong className="font-bold text-[#2c0d16]">UPI ID:</strong>{' '}
+                      <code className="text-base font-black text-[#2c0d16]">{upi.upiId}</code>
+                    </span>
+                    <button type="button" onClick={handleCopy} aria-label="Copy UPI ID" className="inline-flex items-center gap-1 rounded-full border border-[#e5c88d] bg-white px-3 py-1.5 text-xs font-bold text-[#7b102d] transition hover:bg-[#fff7ee]">
+                      <Copy size={12} />
+                      {copied ? 'Copied!' : 'Copy UPI ID'}
+                    </button>
+                  </div>
+                  <div className="mt-1 text-xs text-[#6a4a57]">{upi.payeeName}</div>
+
+                  <div className="mt-3 flex items-start gap-2 self-stretch rounded-2xl bg-[#fffaf3] p-3 text-xs text-[#5a3743]">
+                    <Info size={14} className="mt-0.5 shrink-0 text-[#d4a64a]" />
+                    <span>Scan the QR or pay via GPay / PhonePe / Paytm, then note the <strong>UTR</strong> from your transaction history and submit it below.</span>
                   </div>
                 </div>
 

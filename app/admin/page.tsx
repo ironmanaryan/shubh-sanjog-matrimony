@@ -347,7 +347,15 @@ export default function AdminPage() {
     fetch(`${API}/admin/me`, { headers: { Authorization: `Bearer ${token}` } })
       .then(async (res) => {
         settled = true;
-        if (!res.ok) {
+        let json: { me?: Me | null } | null = null;
+        try {
+          json = await res.json();
+        } catch {
+          json = null; // non-JSON body counts as a failed check
+        }
+        const nextMe = json?.me ?? null;
+
+        if (!res.ok || !nextMe) {
           // Expired/invalid token — drop it, but keep admins in via the cached
           // identity instead of bouncing them to a dead end.
           if (cachedIsAdmin) {
@@ -365,9 +373,9 @@ export default function AdminPage() {
           }
           return;
         }
-        const json = await res.json();
-        if (json.me && !json.me.permissions) json.me.permissions = FULL_PERMISSIONS;
-        setMe(json.me || null);
+
+        if (!nextMe.permissions) nextMe.permissions = FULL_PERMISSIONS;
+        setMe(nextMe);
         setIsAdmin(true);
       })
       .catch((err) => {

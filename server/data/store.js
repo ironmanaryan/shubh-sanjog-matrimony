@@ -1,5 +1,6 @@
 // Simple in-memory store for demo purposes. Replace with a real DB in production.
 const { v4: uuidv4 } = require('uuid');
+const { matchesAdminIdentifier } = require('../middleware/rbac');
 
 const store = {
   users: new Map(), // userId -> user object
@@ -97,16 +98,40 @@ function setPrivacySettings(userId, { hidePhoto, hidePhone }) {
   return current.privacy;
 }
 
-function createUserIfMissing(identifier) {
-  // identifier could be phone or email (string)
-  for (const [id, user] of store.users.entries()) {
-    if (user.identifier === identifier) return user;
+function normalizeEmail(email) {
+  // Email is strictly optional: empty/undefined/whitespace collapses to null so
+  // we never persist '' (which would collide in unique indexes / lookups).
+  const value = String(email || '').trim().toLowerCase();
+  return value || null;
+}
+
+// identifier is the phone number (primary) or an email for legacy accounts.
+// `details` carries the strictly-optional extras collected at registration.
+function createUserIfMissing(identifier, details = {}) {
+  const key = String(identifier || '').trim();
+  if (!key) return null;
+
+  const existing = Array.from(store.users.values()).find(
+    (user) => String(user.identifier).toLowerCase() === key.toLowerCase()
+  );
+  if (existing) {
+    // Backfill optional details if they arrive on a later sign-in.
+    if (!existing.email && details.email) existing.email = normalizeEmail(details.email);
+    if (!existing.fullName && details.fullName) existing.fullName = String(details.fullName).trim();
+    return existing;
   }
 
-  const role = String(identifier || '').toLowerCase().includes('admin') ? 'admin' : 'customer';
-  const user = { id: uuidv4(), identifier, role, createdAt: Date.now() };
+  const role = matchesAdminIdentifier(key) ? 'admin' : 'customer';
+  const user = {
+    id: uuidv4(),
+    identifier: key,
+    email: normalizeEmail(details.email), // null when not provided
+    fullName: details.fullName ? String(details.fullName).trim() : undefined,
+    role,
+    createdAt: Date.now(),
+  };
   store.users.set(user.id, user);
   return user;
 }
 
-module.exports = { store, createUserIfMissing, ensureMembership, applyUsage, activateMembership, getPlan, isMembershipTier, getPrivacySettings, setPrivacySettings, MEMBERSHIP_PACKAGES, UPI_CONFIG };
+module.exports = { store, createUserIfMissing, normalizeEmail, ensureMembership, applyUsage, activateMembership, getPlan, isMembershipTier, getPrivacySettings, setPrivacySettings, MEMBERSHIP_PACKAGES, UPI_CONFIG };

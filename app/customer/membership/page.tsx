@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { BadgeCheck, CheckCircle2, ChevronRight, Copy, CreditCard, FileUp, Info, ShieldCheck, Smartphone, Wallet, XCircle } from 'lucide-react';
-import { MockQrCode } from '../../../components/UpiPaymentModal';
+import { PaymentQrCode } from '../../../components/UpiPaymentModal';
 
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
@@ -32,7 +32,7 @@ type PaymentRecord = {
   reviewedAt?: number | null;
 };
 
-const FALLBACK_UPI = { upiId: 'shubhsanjog@upi', payeeName: 'Shubh Sanjog Matrimony' };
+const FALLBACK_UPI = { upiId: 'deepakrajmeh@okaxis', payeeName: 'Shubh Sanjog Matrimony' };
 
 function formatINR(amount: number) {
   return `₹${amount.toLocaleString('en-IN')}`;
@@ -251,31 +251,32 @@ export default function MembershipCheckoutPage() {
         )}
 
         <section className="mt-6 grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
-          {/* UPI payment placeholder */}
+          {/* Real UPI QR + payee details */}
           <div className="rounded-[28px] border border-[#f2d9a8] bg-white p-5 shadow-soft">
             <h2 className="flex items-center gap-2 text-xl font-black text-[#2c0d16]"><Smartphone size={20} /> UPI Payment</h2>
             <p className="mt-2 text-sm text-[#5a3743]">
               Pay <span className="font-bold">{formatINR(selectedPlan?.price ?? 0)}</span> for the <span className="font-bold">{selectedPlan?.tier}</span> plan using the QR code or UPI ID below, then submit your UTR and receipt.
             </p>
 
-            <div className="mt-5 flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-              <MockQrCode seed={`${upi.upiId}|${selectedPlan?.tier}|${selectedPlan?.price}`} />
-              <div className="w-full space-y-3">
-                <div className="rounded-2xl bg-[#fff8ee] p-4">
-                  <div className="text-xs font-bold uppercase tracking-[0.18em] text-[#7b102d]">UPI ID</div>
-                  <div className="mt-1 flex items-center justify-between gap-2">
-                    <code className="text-lg font-black text-[#2c0d16]">{upi.upiId}</code>
-                    <button type="button" onClick={handleCopy} className="inline-flex items-center gap-1 rounded-full border border-[#e5c88d] bg-white px-3 py-1.5 text-xs font-bold text-[#7b102d] transition hover:bg-[#fff7ee]">
-                      <Copy size={12} />
-                      {copied ? 'Copied!' : 'Copy'}
-                    </button>
-                  </div>
-                  <div className="mt-1 text-xs text-[#6a4a57]">{upi.payeeName}</div>
-                </div>
-                <div className="flex items-start gap-2 rounded-2xl bg-[#fffaf3] p-3 text-xs text-[#5a3743]">
-                  <Info size={14} className="mt-0.5 shrink-0 text-[#d4a64a]" />
-                  <span>Open GPay / PhonePe / Paytm / BHIM → scan or pay to the UPI ID → note the <strong>12-digit UTR</strong> from your transaction history → submit it here with a screenshot.</span>
-                </div>
+            <div className="mt-5 flex flex-col items-center">
+              <PaymentQrCode />
+
+              {/* UPI ID directly under the QR for easy copy-pasting */}
+              <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                <span className="text-sm text-[#5a3743]">
+                  <strong className="font-bold text-[#2c0d16]">UPI ID:</strong>{' '}
+                  <code className="text-base font-black text-[#2c0d16]">{upi.upiId}</code>
+                </span>
+                <button type="button" onClick={handleCopy} aria-label="Copy UPI ID" className="inline-flex items-center gap-1 rounded-full border border-[#e5c88d] bg-white px-3 py-1.5 text-xs font-bold text-[#7b102d] transition hover:bg-[#fff7ee]">
+                  <Copy size={12} />
+                  {copied ? 'Copied!' : 'Copy UPI ID'}
+                </button>
+              </div>
+              <div className="mt-1 text-xs text-[#6a4a57]">{upi.payeeName}</div>
+
+              <div className="mt-3 flex items-start gap-2 self-stretch rounded-2xl bg-[#fffaf3] p-3 text-xs text-[#5a3743]">
+                <Info size={14} className="mt-0.5 shrink-0 text-[#d4a64a]" />
+                <span>Open GPay / PhonePe / Paytm / BHIM → scan or pay to the UPI ID → note the <strong>12-digit UTR</strong> from your transaction history → submit it here with a screenshot.</span>
               </div>
             </div>
           </div>

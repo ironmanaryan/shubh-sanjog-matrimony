@@ -14,6 +14,9 @@ import {
 
 const EMPTY_OTP = ['', '', '', '', '', ''];
 const RESEND_SECONDS = 30;
+// Hardcoded dev staff credential (mirrors server ADMIN_IDENTIFIERS default) —
+// lets the panel be opened instantly in development without any setup.
+const DEMO_ADMIN_IDENTIFIER = 'admin@shubhsanjog.com';
 
 // Inline admin sign-in card rendered by /admin when no valid staff session
 // exists, so the panel never dead-ends behind a redirect (scope PDF §29).
@@ -41,8 +44,8 @@ export default function AdminSignInGate() {
     setMessageTone(tone);
   };
 
-  const handleSendOtp = async () => {
-    const value = identifier.trim();
+  const sendOtpTo = async (raw: string) => {
+    const value = raw.trim();
     if (!value) {
       notify('Please enter your staff mobile number or email.', 'error');
       return;
@@ -68,6 +71,10 @@ export default function AdminSignInGate() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleSendOtp = async () => {
+    await sendOtpTo(identifier);
   };
 
   const completeLogin = async (code: string) => {
@@ -151,14 +158,28 @@ export default function AdminSignInGate() {
               </button>
 
               {isDev() && (
-                <p className="text-center text-xs font-medium text-[#8a7340]">
-                  Development mode — any identifier works with OTP{' '}
-                  <span className="rounded-md border border-gold-300/70 bg-[#fffaf0] px-1.5 py-0.5 font-mono font-bold text-maroon-700">
-                    {DEV_MASTER_OTP}
-                  </span>{' '}
-                  · use an identifier containing{' '}
-                  <span className="font-mono font-semibold text-maroon-700">&quot;admin&quot;</span> for admin access
-                </p>
+                <>
+                  <p className="text-center text-xs font-medium text-[#8a7340]">
+                    Development mode — any identifier works with OTP{' '}
+                    <span className="rounded-md border border-gold-300/70 bg-[#fffaf0] px-1.5 py-0.5 font-mono font-bold text-maroon-700">
+                      {DEV_MASTER_OTP}
+                    </span>{' '}
+                    · use an identifier containing{' '}
+                    <span className="font-mono font-semibold text-maroon-700">&quot;admin&quot;</span> for admin access
+                  </p>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setIdentifier(DEMO_ADMIN_IDENTIFIER);
+                      void sendOtpTo(DEMO_ADMIN_IDENTIFIER);
+                    }}
+                    className="w-full rounded-full border border-[#e5c88d] bg-[#fffaf0] px-5 py-2.5 text-xs font-bold uppercase tracking-wide text-[#8a5a11] transition hover:bg-[#fff3dd] disabled:opacity-70"
+                  >
+                    <ShieldCheck size={13} className="mr-1.5 inline" />
+                    Quick dev sign-in ({DEMO_ADMIN_IDENTIFIER})
+                  </button>
+                </>
               )}
             </>
           ) : (

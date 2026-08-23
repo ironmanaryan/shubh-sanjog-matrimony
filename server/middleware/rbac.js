@@ -57,6 +57,25 @@ const PERMISSIONS = {
   },
 };
 
+// --- Admin identity resolution ----------------------------------------------
+// Staff can always reach the panel without a pre-seeded DB role: identifiers on
+// this list (env-configurable, hardcoded dev default) are treated as admins,
+// as is anything containing "admin" (e.g. admin@shubhsanjog.com).
+function normalizeIdentifierValue(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+const ADMIN_IDENTIFIERS = String(process.env.ADMIN_IDENTIFIERS || 'admin@shubhsanjog.com')
+  .split(',')
+  .map((value) => normalizeIdentifierValue(value))
+  .filter(Boolean);
+
+function matchesAdminIdentifier(identifier) {
+  const value = normalizeIdentifierValue(identifier);
+  if (!value) return false;
+  return ADMIN_IDENTIFIERS.includes(value) || value.includes('admin');
+}
+
 function permissionsFor(role) {
   return PERMISSIONS[role] || PERMISSIONS[ROLES.CUSTOMER];
 }
@@ -83,4 +102,4 @@ function requirePermission(permission) {
   };
 }
 
-module.exports = { ROLES, ASSIGNABLE_ROLES, STAFF_ROLES, PERMISSIONS, permissionsFor, isStaffRole, requireStaffRole, requirePermission };
+module.exports = { ROLES, ASSIGNABLE_ROLES, STAFF_ROLES, PERMISSIONS, ADMIN_IDENTIFIERS, matchesAdminIdentifier, permissionsFor, isStaffRole, requireStaffRole, requirePermission };

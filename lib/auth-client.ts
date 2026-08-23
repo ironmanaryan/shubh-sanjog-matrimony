@@ -55,10 +55,17 @@ export function clearSession() {
   localStorage.removeItem(USER_KEY);
 }
 
-// Role heuristic mirrors the server: identifiers containing "admin" get the
-// admin role so `admin@shubhsanjog.com` / `admin` land on the admin panel.
+// Role heuristic mirrors the server (which also honors an env-configured
+// ADMIN_IDENTIFIERS list): identifiers containing "admin" get the admin role so
+// `admin@shubhsanjog.com` / `admin` land on the admin panel.
 export function roleForIdentifier(identifier: string): 'admin' | 'customer' {
   return identifier.toLowerCase().includes('admin') ? 'admin' : 'customer';
+}
+
+// Loose shape check used to validate the OPTIONAL email field — never used to
+// require one. Phone-only sign-in/registration is fully supported.
+export function looksLikeEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 }
 
 export async function sendOtp(identifier: string): Promise<OtpSendResult> {
@@ -85,12 +92,21 @@ export type VerifyResult =
   | { ok: true; role: string }
   | { ok: false; error: string };
 
-export async function verifyOtp(identifier: string, code: string): Promise<VerifyResult> {
+export type VerifyOtpDetails = {
+  fullName?: string;
+  email?: string; // strictly optional — omitted/null when the user skipped it
+};
+
+export async function verifyOtp(
+  identifier: string,
+  code: string,
+  details: VerifyOtpDetails = {}
+): Promise<VerifyResult> {
   try {
     const res = await fetch(`${API}/auth/verify-otp`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identifier, code }),
+      body: JSON.stringify({ identifier, code, ...details }),
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.token) return { ok: false, error: json.error || 'Invalid OTP' };

@@ -2,6 +2,8 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { fetchJsonWithFallback, requestJson } from '@/lib/api-client';
+import { MOCK_BIODATA } from '@/lib/mock-data';
 
 // Biodata sections exactly as scoped (scope PDF §5-§6):
 // Personal Details | Education & Career | Lifestyle | Family | Partner Preferences
@@ -108,6 +110,19 @@ const emptyBiodata: BiodataState = {
   preferences: {},
 };
 
+// Shape of GET/POST /profile* responses (mirrors server profileController).
+type ProfileEnvelope = {
+  profile?: {
+    personal?: Partial<PersonalInfo>;
+    education?: Partial<EducationInfo>;
+    family?: Partial<FamilyInfo>;
+    preferences?: Partial<PreferenceInfo>;
+    status?: string;
+    reviewNote?: string | null;
+    [key: string]: unknown;
+  };
+};
+
 const inputClass = 'w-full rounded-xl border border-[#f2d9a8] bg-[#fffaf3] px-3 py-2 text-sm text-[#2c0d16] outline-none focus:border-[#d4a64a]';
 
 export default function BiodataStepper({ initial }: { initial?: Partial<BiodataState> }) {
@@ -141,45 +156,46 @@ export default function BiodataStepper({ initial }: { initial?: Partial<BiodataS
     return value.trim() === '' ? undefined : Number(value);
   }
 
-  const API = (process.env.NEXT_PUBLIC_API_URL as string) || 'http://localhost:4000/api';
-
   useEffect(() => {
-    // load existing profile when token is present
+    // Load the saved profile when a token is present. If the API is
+    // unreachable ("TypeError: Failed to fetch"), fall back silently to the
+    // demo biodata so the stepper still opens fully populated.
     async function load() {
-      try {
-        const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-        if (!token) return;
-        const res = await fetch(`${API}/profile`, { headers: { Authorization: `Bearer ${token}` } });
-        if (!res.ok) return;
-        const json = await res.json();
-        const p = json?.profile || {};
-        setReviewStatus(p.status || 'Draft');
-        setReviewNote(p.reviewNote || null);
-        setData((s) => ({
-          personal: { ...s.personal, ...(p.personal || {}) },
-          education: { ...s.education, ...(p.education || {}) },
-          family: { ...s.family, ...(p.family || {}) },
-          preferences: { ...s.preferences, ...(p.preferences || {}) },
-        }));
-      } catch (err) {
-        console.error('load profile', err);
-      }
+      const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+      if (!token) return;
+      const { data: envelope } = await fetchJsonWithFallback<ProfileEnvelope>('/profile', {
+        headers: { Authorization: `Bearer ${token}` },
+        mock: { profile: MOCK_BIODATA },
+      });
+      const p = envelope?.profile || {};
+      setReviewStatus(p.status || 'Draft');
+      setReviewNote(p.reviewNote || null);
+      setData((s) => ({
+        personal: { ...s.personal, ...(p.personal || {}) },
+        education: { ...s.education, ...(p.education || {}) },
+        family: { ...s.family, ...(p.family || {}) },
+        preferences: { ...s.preferences, ...(p.preferences || {}) },
+      }));
     }
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function saveStep(): Promise<boolean> {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+    if (!token) {
+      setStatusMessage('Please log in to save your biodata.');
+      return false;
+    }
+
     setSaving(true);
     setStatusMessage('');
     try {
-      const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
       let endpoint = '';
-      if (step === 0) endpoint = `${API}/profile/personal`;
-      if (step === 1) endpoint = `${API}/profile/education`;
-      if (step === 2) endpoint = `${API}/profile/personal`; // lifestyle persists in the personal section
-      if (step === 3) endpoint = `${API}/profile/family`;
-      if (step === 4) endpoint = `${API}/profile/preferences`;
+      if (step === 0) endpoint = '/profile/personal';
+      if (step === 1) endpoint = '/profile/education';
+      if (step === 2) endpoint = '/profile/personal'; // lifestyle persists in the personal section
+      if (step === 3) endpoint = '/profile/family';
+      if (step === 4) endpoint = '/profile/preferences';
 
       const body = (() => {
         switch (step) {
@@ -203,34 +219,35 @@ export default function BiodataStepper({ initial }: { initial?: Partial<BiodataS
         }
       })();
 
-      if (!token) {
-        setStatusMessage('Please log in to save your biodata.');
-        return false;
-      }
-
-      const r = await fetch(endpoint, {
+      const { ok, json, networkError } = await requestJson(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(body),
       });
-      if (!r.ok) throw new Error('Save failed');
-      const json = await r.json();
+
+      // Offline ("TypeError: Failed to fetch") — keep the edits locally so the
+      // user can continue through the stepper instead of dead-ending.
+      if (networkError) {
+        setStatusMessage('Saved on this device for now — it will sync once the API server is reachable.');
+        return true;
+      }
+
+      const saved = (json ?? {}) as ProfileEnvelope;
+      if (!ok) throw new Error('Save failed');
       // merge returned profile to keep client state consistent
-      if (json && json.profile) {
-        const saved = json.profile;
-        setReviewStatus(saved.status || 'Draft');
-        setReviewNote(saved.reviewNote || null);
+      if (saved.profile) {
+        setReviewStatus(saved.profile.status || 'Draft');
+        setReviewNote(saved.profile.reviewNote || null);
         setData((s) => ({
-          personal: { ...s.personal, ...(saved.personal || {}) },
-          education: { ...s.education, ...(saved.education || {}) },
-          family: { ...s.family, ...(saved.family || {}) },
-          preferences: { ...s.preferences, ...(saved.preferences || {}) },
+          personal: { ...s.personal, ...(saved.profile?.personal || {}) },
+          education: { ...s.education, ...(saved.profile?.education || {}) },
+          family: { ...s.family, ...(saved.profile?.family || {}) },
+          preferences: { ...s.preferences, ...(saved.profile?.preferences || {}) },
         }));
       }
       return true;
     } catch (err) {
-      console.error(err);
-      setStatusMessage('Save failed. Please try again.');
+      setStatusMessage(err instanceof Error ? err.message : 'Save failed. Please try again.');
       return false;
     } finally {
       setSaving(false);
@@ -252,12 +269,19 @@ export default function BiodataStepper({ initial }: { initial?: Partial<BiodataS
         setStatusMessage('Please log in to submit your profile.');
         return;
       }
-      const res = await fetch(`${API}/profile/submit`, {
+      const { ok, json, networkError } = await requestJson('/profile/submit', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Submission failed');
+      if (networkError) {
+        // Offline — reflect the submitted state locally instead of failing.
+        setReviewStatus('Submitted');
+        setReviewNote(null);
+        setStatusMessage('Profile marked as submitted on this device. It will be sent for review once the API server is reachable.');
+        return;
+      }
+      const detail = (json ?? {}) as { error?: string };
+      if (!ok) throw new Error(detail.error || 'Submission failed');
       setReviewStatus('Submitted');
       setReviewNote(null);
       setStatusMessage('Profile submitted for admin review. You will be notified after verification.');

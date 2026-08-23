@@ -4,8 +4,14 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { Bell, BriefcaseBusiness, CheckCheck, ChevronRight, CreditCard, FileText, Heart, Home, MessageSquare, ShieldCheck, Sparkles, UserRound, Wallet } from 'lucide-react';
 import PrivacySettings from '../../components/customer/PrivacySettings';
-
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+import { fetchJsonWithFallback, requestJson } from '@/lib/api-client';
+import {
+  MOCK_APPOINTMENTS_RESPONSE,
+  MOCK_DOCUMENTS_RESPONSE,
+  MOCK_NOTIFICATIONS_RESPONSE,
+  MOCK_PROFILE_RESPONSE,
+  MOCK_STATS_RESPONSE,
+} from '@/lib/mock-data';
 
 // Customer panel sections from the reference scope document
 const navItems = [
@@ -200,17 +206,8 @@ function CompletionRing({ value }: { value: number }) {
 }
 
 // Guarded GET that never throws — network failures ("TypeError: Failed to
-// fetch") resolve to null instead of crashing the dashboard UI.
-async function fetchJson<T>(url: string, headers: HeadersInit): Promise<T | null> {
-  try {
-    const res = await fetch(url, { headers });
-    if (!res.ok) return null;
-    return (await res.json()) as T;
-  } catch (err) {
-    console.error('dashboard request failed:', url, err);
-    return null;
-  }
-}
+// fetch") resolve silently to realistic mock data via fetchJsonWithFallback()
+// instead of crashing or logging intrusive errors.
 
 type ProfileResponse = { profile?: Partial<ProfileData> };
 type StatsResponse = { stats?: { membership?: MembershipSummary; recommendedProfiles?: unknown[]; matchesRemaining?: number } };
@@ -262,35 +259,36 @@ export default function CustomerDashboardPage() {
       return;
     }
 
-    // Every request is wrapped by fetchJson() so one failed endpoint
-    // ("TypeError: Failed to fetch") can never blank out the whole dashboard.
+    // Every request falls back to realistic demo data when the API is
+    // unreachable, so one failed endpoint ("TypeError: Failed to fetch") can
+    // never blank out the whole dashboard.
     const [profileJson, statsJson, docsJson, appointmentsJson, notificationsJson] = await Promise.all([
-      fetchJson<ProfileResponse>(`${API}/customer/profile`, headers),
-      fetchJson<StatsResponse>(`${API}/dashboard/stats`, headers),
-      fetchJson<DocsResponse>(`${API}/documents`, headers),
-      fetchJson<AppointmentsResponse>(`${API}/appointments/my`, headers),
-      fetchJson<NotificationsResponse>(`${API}/notifications`, headers),
+      fetchJsonWithFallback<ProfileResponse>('/customer/profile', { headers, mock: MOCK_PROFILE_RESPONSE }),
+      fetchJsonWithFallback<StatsResponse>('/dashboard/stats', { headers, mock: MOCK_STATS_RESPONSE }),
+      fetchJsonWithFallback<DocsResponse>('/documents', { headers, mock: MOCK_DOCUMENTS_RESPONSE }),
+      fetchJsonWithFallback<AppointmentsResponse>('/appointments/my', { headers, mock: MOCK_APPOINTMENTS_RESPONSE }),
+      fetchJsonWithFallback<NotificationsResponse>('/notifications', { headers, mock: MOCK_NOTIFICATIONS_RESPONSE }),
     ]);
 
-    if (profileJson?.profile) {
+    if (profileJson.data.profile) {
       setProfile({
         ...defaultProfile,
-        ...(profileJson.profile as ProfileData),
+        ...(profileJson.data.profile as ProfileData),
       });
     }
-    if (statsJson?.stats) {
-      const stats = statsJson.stats;
+    if (statsJson.data.stats) {
+      const stats = statsJson.data.stats;
       if (stats.membership) setMembership(stats.membership);
       setRecommendedCount(Array.isArray(stats.recommendedProfiles) ? stats.recommendedProfiles.length : Number(stats.matchesRemaining) || 0);
     }
-    if (docsJson) setDocuments(docsJson.documents || []);
-    if (appointmentsJson) setAppointments(appointmentsJson.appointments || []);
-    if (notificationsJson) setNotifications(notificationsJson.notifications || []);
+    setDocuments(docsJson.data.documents || []);
+    setAppointments(appointmentsJson.data.appointments || []);
+    setNotifications(notificationsJson.data.notifications || []);
 
-    // All five endpoints failed → API unreachable; say so instead of failing silently.
-    const failed = [profileJson, statsJson, docsJson, appointmentsJson, notificationsJson].filter((result) => result === null).length;
-    if (failed === 5) {
-      setStatusMessage('Dashboard data is temporarily unavailable — the API server seems unreachable. Please refresh once you are back online.');
+    // Every endpoint fell back to demo data — API unreachable. Say so gently
+    // instead of failing silently or throwing errors.
+    if (profileJson.fromMock && statsJson.fromMock && docsJson.fromMock && appointmentsJson.fromMock && notificationsJson.fromMock) {
+      setStatusMessage('Offline preview — showing demo data until the API server is reachable.');
     }
 
     setLoading(false);
@@ -350,13 +348,14 @@ export default function CustomerDashboardPage() {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('documentType', 'kundli');
-      const res = await fetch(`${API}/documents/upload`, {
+      const { ok, json, networkError } = await requestJson('/documents/upload', {
         method: 'POST',
         headers,
         body: formData,
       });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json.error || 'Upload failed');
+      if (networkError) throw new Error('You appear to be offline — the API server is unreachable. Please retry the upload once you are back online.');
+      const detail = (json ?? {}) as { error?: string };
+      if (!ok) throw new Error(detail.error || 'Upload failed');
       setStatusMessage('Horoscope uploaded and marked for review.');
       await loadData();
     } catch (error) {
@@ -377,13 +376,14 @@ export default function CustomerDashboardPage() {
 
     setBookingBusy(true);
     try {
-      const res = await fetch(`${API}/appointments/book`, {
+      const { ok, json, networkError } = await requestJson('/appointments/book', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...headers },
         body: JSON.stringify({ date: bookingForm.date, time: bookingForm.time, type: bookingForm.type, notes: bookingForm.notes }),
       });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json.error || 'Booking failed');
+      if (networkError) throw new Error('You appear to be offline — the booking could not be saved. Please retry once the API server is reachable.');
+      const detail = (json ?? {}) as { error?: string };
+      if (!ok) throw new Error(detail.error || 'Booking failed');
       setStatusMessage('Consultation booked successfully.');
       setBookingForm({ date: new Date(Date.now() + 86400000).toISOString().slice(0, 10), time: '09:00 AM', type: 'Consultation', notes: '' });
       await loadData();
