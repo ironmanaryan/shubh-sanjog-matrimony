@@ -1,0 +1,41 @@
+// HMAC-signed, short-lived URLs for private files (scope PDF §30/§31).
+// Documents and receipts are never exposed at public static paths — access is
+// granted only via a signed token that encodes the file id, the grantee and an
+// expiry. The signature uses the same secret as JWTs.
+const crypto = require('crypto');
+
+const SECRET = process.env.JWT_SECRET || 'dev-secret-please-change';
+const DEFAULT_TTL_SECONDS = 300; // 5 minutes
+
+function b64url(input) {
+  return Buffer.from(input).toString('base64url');
+}
+
+function hmac(data) {
+  return crypto.createHmac('sha256', SECRET).update(data).digest('base64url');
+}
+
+// payload: plain object (kept small — docId, userId, purpose)
+function signPayload(payload) {
+  const body = b64url(JSON.stringify({ ...payload, exp: Date.now() + DEFAULT_TTL_SECONDS * 1000 }));
+  return `${body}.${hmac(body)}`;
+}
+
+// Returns the payload when the token is valid and unexpired, else null.
+function verifyPayload(token) {
+  if (typeof token !== 'string' || !token.includes('.')) return null;
+  const [body, sig] = token.split('.');
+  try {
+    const expected = hmac(body);
+    const a = Buffer.from(sig);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (!payload.exp || Number(payload.exp) < Date.now()) return null;
+    return payload;
+  } catch (e) {
+    return null;
+  }
+}
+
+module.exports = { signPayload, verifyPayload, DEFAULT_TTL_SECONDS };

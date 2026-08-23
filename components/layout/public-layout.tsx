@@ -1,0 +1,347 @@
+'use client';
+
+import Link from 'next/link';
+import { Menu, X, Phone, MapPin, ShieldCheck, ChevronDown, UserRound } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+
+const WHATSAPP_URL = 'https://wa.me/919034850873';
+
+// WhatsApp brand glyph (lucide has no brand icons)
+function WhatsAppIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...props}>
+      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.297-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.05-.52-.099-.148-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z" />
+    </svg>
+  );
+}
+
+const navItems = [
+  { label: 'Home', href: '/' },
+  { label: 'About Us', href: '/#about' },
+  { label: 'How It Works', href: '/#how-it-works' },
+  { label: 'Membership Plans', href: '/#plans' },
+  { label: 'Consultation', href: '/#consultation' },
+  { label: 'Contact Us', href: '/contact' },
+];
+
+const viewLinks = [
+  { label: 'Customer View', href: '/customer' },
+  { label: 'Admin View', href: '/admin' },
+];
+
+export default function PublicLayout({ children }: { children: React.ReactNode }) {
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [viewsOpen, setViewsOpen] = useState(false);
+  const viewsRef = useRef<HTMLDivElement>(null);
+  const drawerCloseRef = useRef<HTMLButtonElement>(null);
+
+  // Close the "Views" dropdown on outside click or Escape.
+  useEffect(() => {
+    if (!viewsOpen) return;
+    const handlePointerDown = (event: MouseEvent) => {
+      if (viewsRef.current && event.target instanceof Node && viewsRef.current.contains(event.target)) return;
+      setViewsOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setViewsOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [viewsOpen]);
+
+  // Lock body scroll and support Escape while the mobile drawer is open.
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileOpen(false);
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    const focusTimer = window.setTimeout(() => drawerCloseRef.current?.focus(), 60);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', handleKeyDown);
+      window.clearTimeout(focusTimer);
+    };
+  }, [mobileOpen]);
+
+  // Reset drawer state when resizing up to desktop.
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 1024px)');
+    const handleChange = () => {
+      if (media.matches) setMobileOpen(false);
+    };
+    media.addEventListener('change', handleChange);
+    return () => media.removeEventListener('change', handleChange);
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-[#fffaf8] text-[#2c0d16]">
+      <header className="sticky top-0 z-50 border-b border-rose-100 bg-white/80 backdrop-blur-md">
+        <div className="mx-auto flex h-16 items-center gap-4 px-4 sm:h-[72px] sm:px-6 lg:h-[76px] lg:gap-6 lg:px-8">
+          {/* Brand */}
+          <div className="flex flex-1 justify-start">
+            <Link href="/" aria-label="Shubh Sanjog Matrimony home" className="group flex shrink-0 items-center gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-[#7b102d] via-[#a91336] to-[#d4a64a] text-base font-bold text-white shadow-md shadow-[#7b102d]/25 transition-transform duration-300 group-hover:scale-105 sm:h-11 sm:w-11 sm:text-lg">
+                S
+              </span>
+              <span className="leading-none">
+                <span className="font-display block whitespace-nowrap text-xl tracking-tight text-[#2c0d16] sm:text-2xl">Shubh Sanjog</span>
+                <span className="mt-1 block text-[10px] font-semibold uppercase tracking-[0.3em] text-[#7b102d]/70">Matrimony</span>
+              </span>
+            </Link>
+          </div>
+
+          {/* Center navigation links */}
+          <nav aria-label="Primary" className="hidden items-center gap-8 lg:flex xl:gap-9">
+            {navItems.map((item) => (
+              <Link
+                key={item.label}
+                href={item.href}
+                className="whitespace-nowrap text-sm font-medium text-[#4a2a35] transition-colors duration-200 hover:text-[#800020]"
+              >
+                {item.label}
+              </Link>
+            ))}
+          </nav>
+
+          {/* Right CTA group */}
+          <div className="flex flex-1 items-center justify-end gap-2.5">
+            {/* Secondary demo/demo views dropdown (kept out of the primary CTAs) */}
+            <div ref={viewsRef} className="relative hidden lg:block">
+              <button
+                type="button"
+                aria-haspopup="menu"
+                aria-expanded={viewsOpen}
+                onClick={() => setViewsOpen((open) => !open)}
+                className="flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-2 text-sm font-medium text-[#8a6a75] transition-colors duration-200 hover:text-[#800020]"
+              >
+                Views
+                <ChevronDown size={14} className={`transition-transform duration-200 ${viewsOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {viewsOpen && (
+                <div role="menu" aria-label="Quick views" className="absolute right-0 top-full mt-2 w-52 overflow-hidden rounded-2xl border border-rose-100 bg-white p-1.5 shadow-xl shadow-[#2c0d16]/10">
+                  <p className="px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-[0.18em] text-[#b08a95]">Demo access</p>
+                  <Link
+                    role="menuitem"
+                    href="/customer"
+                    onClick={() => setViewsOpen(false)}
+                    className="flex items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm font-medium text-[#4a2a35] transition-colors duration-150 hover:bg-rose-50 hover:text-[#800020]"
+                  >
+                    <UserRound size={15} className="text-[#b08a95]" />
+                    Customer View
+                  </Link>
+                  <Link
+                    role="menuitem"
+                    href="/admin"
+                    onClick={() => setViewsOpen(false)}
+                    className="flex items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm font-medium text-[#4a2a35] transition-colors duration-150 hover:bg-rose-50 hover:text-[#800020]"
+                  >
+                    <ShieldCheck size={15} className="text-[#b08a95]" />
+                    Admin View
+                  </Link>
+                </div>
+              )}
+            </div>
+
+            <span aria-hidden="true" className="mx-1 hidden h-5 w-px bg-rose-100 lg:block" />
+
+            <Link
+              href="/login"
+              className="hidden whitespace-nowrap rounded-full border border-[#800020]/25 px-5 py-2.5 text-sm font-semibold text-[#800020] transition-all duration-200 hover:border-[#800020]/60 hover:bg-[#800020]/[0.04] lg:inline-flex"
+            >
+              Login
+            </Link>
+            <Link
+              href="/register"
+              className="hidden whitespace-nowrap rounded-full bg-[#800020] px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-[#800020]/25 transition-all duration-300 hover:-translate-y-0.5 hover:bg-[#68001a] hover:shadow-lg hover:shadow-[#800020]/30 lg:inline-flex"
+            >
+              Register
+            </Link>
+
+            {/* Hamburger trigger */}
+            <button
+              type="button"
+              aria-label="Open navigation menu"
+              aria-controls="mobile-nav-drawer"
+              aria-expanded={mobileOpen}
+              onClick={() => setMobileOpen(true)}
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-rose-100 bg-white text-[#800020] transition-colors duration-200 hover:border-[#800020]/30 hover:bg-rose-50 lg:hidden"
+            >
+              <Menu size={20} />
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* Mobile drawer overlay */}
+      <div
+        aria-hidden="true"
+        onClick={() => setMobileOpen(false)}
+        className={`fixed inset-0 z-[60] bg-[#2c0d16]/45 backdrop-blur-sm transition-opacity duration-300 ease-out lg:hidden ${
+          mobileOpen ? 'opacity-100' : 'pointer-events-none opacity-0'
+        }`}
+      />
+
+      {/* Mobile slide-out drawer */}
+      <aside
+        id="mobile-nav-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Site navigation"
+        inert={!mobileOpen}
+        className={`fixed inset-y-0 right-0 z-[70] flex w-[86%] max-w-xs flex-col bg-white shadow-2xl shadow-[#2c0d16]/25 transition-transform duration-300 ease-out lg:hidden ${
+          mobileOpen ? 'translate-x-0' : 'translate-x-full'
+        }`}
+      >
+        <div className="flex items-center justify-between border-b border-rose-100 px-5 py-4">
+          <span className="flex items-center gap-2.5">
+            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-[#7b102d] via-[#a91336] to-[#d4a64a] text-sm font-bold text-white">
+              S
+            </span>
+            <span className="leading-none">
+              <span className="block text-base font-black tracking-tight text-[#2c0d16]">Shubh Sanjog</span>
+              <span className="mt-0.5 block text-[9px] font-semibold uppercase tracking-[0.28em] text-[#7b102d]/70">Matrimony</span>
+            </span>
+          </span>
+          <button
+            ref={drawerCloseRef}
+            type="button"
+            aria-label="Close navigation menu"
+            onClick={() => setMobileOpen(false)}
+            className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-rose-100 bg-white text-[#800020] transition-colors hover:bg-rose-50"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <nav aria-label="Mobile" className="flex flex-col gap-1 overflow-y-auto px-3 py-4">
+          {navItems.map((item) => (
+            <Link
+              key={item.label}
+              href={item.href}
+              onClick={() => setMobileOpen(false)}
+              className="rounded-xl px-4 py-3 text-[15px] font-medium text-[#4a2a35] transition-colors duration-150 hover:bg-rose-50 hover:text-[#800020]"
+            >
+              {item.label}
+            </Link>
+          ))}
+        </nav>
+
+        <div className="mt-auto space-y-4 border-t border-rose-100 px-5 py-5">
+          <div className="grid grid-cols-2 gap-3">
+            <Link
+              href="/login"
+              onClick={() => setMobileOpen(false)}
+              className="inline-flex items-center justify-center rounded-full border border-[#800020]/25 px-4 py-2.5 text-sm font-semibold text-[#800020] transition-colors hover:border-[#800020]/60 hover:bg-[#800020]/[0.04]"
+            >
+              Login
+            </Link>
+            <Link
+              href="/register"
+              onClick={() => setMobileOpen(false)}
+              className="inline-flex items-center justify-center rounded-full bg-[#800020] px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-[#800020]/25 transition-colors hover:bg-[#68001a]"
+            >
+              Register
+            </Link>
+          </div>
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#b08a95]">Demo access</p>
+            <div className="mt-2 flex items-center gap-4">
+              {viewLinks.map((view) => (
+                <Link
+                  key={view.label}
+                  href={view.href}
+                  onClick={() => setMobileOpen(false)}
+                  className="text-sm font-medium text-[#8a6a75] underline-offset-4 transition-colors hover:text-[#800020] hover:underline"
+                >
+                  {view.label}
+                </Link>
+              ))}
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <main>{children}</main>
+
+      {/* Floating WhatsApp chat widget — fixed bottom-right, site-wide */}
+      <a
+        href={WHATSAPP_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Chat with us on WhatsApp"
+        title="Chat with us on WhatsApp"
+        className="group fixed bottom-6 right-6 z-40 inline-flex items-center gap-2.5 rounded-full bg-[#25D366] py-3.5 pl-4 pr-4 text-sm font-bold text-white shadow-xl shadow-[#25D366]/30 transition-all duration-200 hover:scale-[1.03] hover:bg-[#1fbf5b] sm:pr-5"
+      >
+        <WhatsAppIcon className="h-6 w-6 shrink-0" />
+        <span className="hidden sm:inline">Chat with us</span>
+      </a>
+
+      <footer className="mt-24 border-t border-[#f4d4a1] bg-[#fffdfb]">
+        <div className="mx-auto grid max-w-7xl gap-10 px-4 py-12 sm:px-6 lg:grid-cols-[1.2fr_0.8fr_0.8fr] lg:px-8">
+          <div>
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-full bg-gradient-to-br from-[#7b102d] to-[#d4a64a] font-black text-white">
+                S
+              </div>
+              <div>
+                <div className="text-xl font-black text-[#2c0d16]">Shubh Sanjog</div>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.27em] text-[#9e6b00]">Matrimony</div>
+              </div>
+            </div>
+            <p className="mt-5 max-w-md text-sm leading-7 text-[#5f3d49]">
+              Bringing together families through thoughtful matchmaking, genuine compatibility, and a secure, respectful journey toward a meaningful lifelong partnership.
+            </p>
+          </div>
+
+          <div>
+            <h3 className="text-sm font-black uppercase tracking-[0.25em] text-[#7b102d]">Contact</h3>
+            <ul className="mt-5 space-y-4 text-sm text-[#5f3d49]">
+              <li className="flex items-center gap-3">
+                <Phone size={16} className="text-[#b88b24]" />
+                <span>+91 9034850873</span>
+              </li>
+              <li className="flex items-center gap-3">
+                <WhatsAppIcon className="h-4 w-4 text-[#25D366]" />
+                <Link href="/contact" className="transition hover:text-[#7b102d]">Chat / Contact Us</Link>
+              </li>
+              <li className="flex items-center gap-3">
+                <MapPin size={16} className="text-[#b88b24]" />
+                <span>Fatehabad, Haryana, India</span>
+              </li>
+            </ul>
+          </div>
+
+          <div>
+            <h3 className="text-sm font-black uppercase tracking-[0.25em] text-[#7b102d]">Legal</h3>
+            <ul className="mt-5 space-y-3 text-sm text-[#5f3d49]">
+              <li><Link href="/privacy" className="transition hover:text-[#7b102d]">Privacy Policy</Link></li>
+              <li><Link href="/terms" className="transition hover:text-[#7b102d]">Terms & Conditions</Link></li>
+              <li><Link href="/terms#conduct" className="transition hover:text-[#7b102d]">Community Guidelines</Link></li>
+              <li><Link href="/refund" className="transition hover:text-[#7b102d]">Refund & Cancellation Policy</Link></li>
+              <li><Link href="/faq" className="transition hover:text-[#7b102d]">FAQ</Link></li>
+              <li><Link href="/contact" className="transition hover:text-[#7b102d]">Contact Us</Link></li>
+            </ul>
+          </div>
+        </div>
+
+        <div className="border-t border-[#f3d6a6] bg-[#fffaf6]">
+          <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-3 px-4 py-5 text-sm text-[#5f3d49] sm:flex-row sm:px-6 lg:px-8">
+            <p>© 2026 Shubh Sanjog Matrimony. All rights reserved.</p>
+            <div className="flex items-center gap-2">
+              <ShieldCheck size={16} className="text-[#b88b24]" />
+              <span>Secure & trusted matchmaking</span>
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+}

@@ -1,0 +1,131 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #fffaf8;
+  --foreground: #2c0d16;
+  --muted: #6f4a57;
+  --card: #ffffff;
+  --border: rgba(109, 22, 42, 0.12);
+  --gold: #d4af37;
+  --maroon: #800020;
+  --maroon-deep: #65001a;
+}
+
+html {
+  scroll-behavior: smooth;
+  /* Decorative blurred orbs sit partially outside their sections; clip any
+     horizontal overflow so mobile never scrolls sideways. */
+  overflow-x: clip;
+}
+
+body {
+  margin: 0;
+  overflow-x: clip;
+  color: var(--foreground);
+  background: linear-gradient(180deg, #fffaf8 0%, #ffffff 100%);
+  font-family: var(--font-inter), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+}
+
+a {
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+/* ─── Luxury typography: Amaranth for headings & branding ─────────────────── */
+@layer base {
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-amaranth), Georgia, 'Times New Roman', serif;
+    letter-spacing: -0.015em;
+  }
+
+  h4,
+  h5,
+  h6 {
+    font-family: var(--font-amaranth), Georgia, 'Times New Roman', serif;
+    letter-spacing: 0;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  /* Gold hairline gradient rule used under section titles */
+  .gold-rule {
+    background-image: linear-gradient(90deg, transparent, rgba(212, 175, 55, 0.9) 20%, #f3e3ac 50%, rgba(212, 175, 55, 0.9) 80%, transparent);
+  }
+
+  .text-gradient-royal {
+    background: linear-gradient(100deg, #800020 10%, #a91336 45%, #b8962b 90%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  .glass-panel {
+    background: linear-gradient(160deg, rgba(255, 252, 245, 0.88), rgba(255, 255, 255, 0.72));
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    border: 1px solid rgba(212, 175, 55, 0.35);
+  }
+
+  .glass-panel-dark {
+    background: linear-gradient(160deg, rgba(128, 0, 32, 0.55), rgba(63, 0, 16, 0.65));
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    border: 1px solid rgba(232, 206, 122, 0.35);
+  }
+
+  .scroll-mt-header {
+    scroll-margin-top: 5.5rem;
+  }
+
+  /* Standardized interactive-card treatment: gentle lift, 1.02 scale-up and
+     a warm gold glow border on hover (scope: smooth micro-animations). */
+  .card-hover {
+    transition:
+      transform 0.3s cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 0.3s ease,
+      border-color 0.3s ease;
+    will-change: transform;
+  }
+  .card-hover:hover {
+    transform: translateY(-4px) scale(1.02);
+    box-shadow:
+      0 24px 60px -12px rgba(128, 0, 32, 0.18),
+      0 4px 14px rgba(212, 175, 55, 0.12),
+      0 0 0 1px rgba(212, 175, 55, 0.45);
+    border-color: rgba(212, 175, 55, 0.75);
+  }
+
+  /* Accessibility: collapse decorative motion for users who prefer it off. */
+  @media (prefers-reduced-motion: reduce) {
+    .card-hover,
+    .card-hover:hover {
+      transform: none;
+      transition: none;
+    }
+  }
+}
