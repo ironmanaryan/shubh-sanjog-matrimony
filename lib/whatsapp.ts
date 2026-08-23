@@ -6,6 +6,13 @@
 export const WHATSAPP_NUMBER = '919034850873';
 export const WHATSAPP_DISPLAY = '+91 90348 50873';
 
+/**
+ * Standard floating-widget / contact deep link — opens a chat with the bureau
+ * carrying the site-wide inquiry greeting (exact CTA copy used across CTAs).
+ */
+export const WHATSAPP_INQUIRY_LINK =
+  'https://wa.me/919034850873?text=Namaste%20Shubh%20Sanjog%20Marriage%20Bureau,%20I%20have%20an%20inquiry';
+
 /** https://wa.me/<number>?text=<url-encoded message> */
 export function waLink(message?: string | null): string {
   const base = `https://wa.me/${WHATSAPP_NUMBER}`;
