@@ -475,6 +475,43 @@ export default function CustomerDashboardPage() {
               }));
             }
           } catch {}
+        } else {
+          // Fallback to localStorage when Supabase tables are missing (PGRST205) or profile not found
+          try {
+            const raw = localStorage.getItem('shubhSanjogProfile');
+            if (raw) {
+              const local = JSON.parse(raw) as Record<string, unknown>;
+              setSupabaseProfile(local);
+              const personal = (local['personal'] as Record<string, unknown>) || {};
+              const edu = (local['education'] as Record<string, unknown>) || {};
+              const family = (local['family'] as Record<string, unknown>) || {};
+              setProfile((prev) => ({
+                ...prev,
+                personal: {
+                  ...prev.personal,
+                  firstName: (personal['firstName'] as string) || (local['full_name'] as string)?.split(' ')[0] || prev.personal?.firstName,
+                  lastName: (personal['lastName'] as string) || (local['full_name'] as string)?.split(' ').slice(1).join(' ') || prev.personal?.lastName,
+                  gender: (personal['gender'] as string) || (local['gender'] as string) || prev.personal?.gender,
+                  dob: (personal['dob'] as string) || (local['dob'] as string) || prev.personal?.dob,
+                  religion: (personal['religion'] as string) || (local['religion'] as string) || prev.personal?.religion,
+                  caste: (personal['caste'] as string) || (local['caste'] as string) || prev.personal?.caste,
+                  motherTongue: (personal['motherTongue'] as string) || (local['mother_tongue'] as string) || prev.personal?.motherTongue,
+                  city: (personal['city'] as string) || (local['city'] as string) || prev.personal?.city,
+                },
+                education: {
+                  ...prev.education,
+                  highestQualification: (edu['highestQualification'] as string) || (local['highest_qualification'] as string) || prev.education?.highestQualification,
+                  profession: (edu['profession'] as string) || (local['profession'] as string) || prev.education?.profession,
+                  annualIncome: (edu['annualIncome'] as string) || (local['annual_income'] as string) || prev.education?.annualIncome,
+                },
+                family: {
+                  ...prev.family,
+                  fatherName: (family['fatherName'] as string) || (local['father_name'] as string) || prev.family?.fatherName,
+                  motherName: (family['motherName'] as string) || (local['mother_name'] as string) || prev.family?.motherName,
+                },
+              }));
+            }
+          } catch {}
         }
       } catch {}
     })();
