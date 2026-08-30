@@ -44,6 +44,7 @@ function LoginPageInner() {
   const handleGoogleSignIn = async () => {
     const supabase = getSupabase()!;
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    console.log('[OAuth] login origin:', origin);
     if (!origin) {
       notify('Unable to determine site URL. Please refresh and try again.', 'error');
       return;
@@ -54,12 +55,9 @@ function LoginPageInner() {
         provider: 'google',
         options: {
           redirectTo: `${origin}/auth/callback`,
-          queryParams: {
-            access_type: 'offline',
-            prompt: 'consent',
-          },
         },
       });
+      console.log('[OAuth] login result:', { hasUrl: !!data?.url, error: error?.message });
       if (error) {
         console.error('OAuth Error:', error.message);
         notify(error.message || 'Google sign-in failed. Please try again.', 'error');
@@ -67,7 +65,10 @@ function LoginPageInner() {
         return;
       }
       if (data?.url) {
-        window.location.href = data.url;
+        window.location.replace(data.url);
+      } else {
+        notify('Google sign-in failed - no redirect URL.', 'error');
+        setGoogleBusy(false);
       }
     } catch (e) {
       console.error('OAuth exception:', e);

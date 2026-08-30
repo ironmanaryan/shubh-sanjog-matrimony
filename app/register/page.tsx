@@ -74,31 +74,35 @@ function RegisterPageInner() {
   const handleGoogleSignIn = async () => {
     const supabase = getSupabase()!;
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    console.log('[OAuth] origin:', origin, 'supabaseUrl:', (supabase as unknown as { supabaseUrl?: string })?.supabaseUrl || 'unknown');
     if (!origin) {
       notify('Unable to determine site URL. Please refresh and try again.', 'error');
       return;
     }
     setGoogleBusy(true);
     try {
+      // Use minimal redirectTo without queryParams for iOS reliability — Supabase handles offline/consent via dashboard config
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           redirectTo: `${origin}/auth/callback`,
-          queryParams: {
-            access_type: 'offline',
-            prompt: 'consent',
-          },
         },
       });
+      console.log('[OAuth] signInWithOAuth result:', { hasUrl: !!data?.url, url: data?.url?.slice(0,120), error: error?.message });
       if (error) {
         console.error('OAuth Error:', error.message);
         notify(error.message || 'Google sign-in failed. Please try again.', 'error');
         setGoogleBusy(false);
         return;
       }
-      // Supabase JS v2 with PKCE should auto-redirect, but handle data.url explicitly for reliability (iOS/Safari)
       if (data?.url) {
-        window.location.href = data.url;
+        console.log('[OAuth] redirecting to:', data.url.slice(0,120));
+        // Use replace for cleaner history and to avoid Next.js prefetch interference
+        window.location.replace(data.url);
+      } else {
+        console.error('[OAuth] no url returned', data);
+        notify('Google sign-in failed - no redirect URL. Please try again.', 'error');
+        setGoogleBusy(false);
       }
     } catch (e) {
       console.error('OAuth exception:', e);
