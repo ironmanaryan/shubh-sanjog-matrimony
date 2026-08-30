@@ -1,17 +1,21 @@
-// MongoDB persistence driver (Mongoose) — production database.
-//
-// Selected automatically when MONGODB_URI is present (see server/db.js).
-// Implements the same function surface as the legacy SQLite driver so every
-// controller/route stays storage-agnostic, plus new capabilities:
-//   - Otp collection with TTL expiry + attempt counters + send-rate queries
-//   - Manual UPI payment ledger (UTR + receipt proof, admin verified)
-//   - Hard cascade delete for admin "remove user data"
-//   - Appointment completion / feedback lifecycle
-//
-// Real-time contract: every mutation persists to MongoDB inside the request
-// that performs it. The warm in-memory cache (data/store.js) is hydrated at
-// boot and kept coherent by the controllers (same pattern as SQLite mode).
-const mongoose = require('mongoose');
+// MongoDB persistence driver (Mongoose) — LEGACY / DEPRECATED
+// This driver is retained only for transition fallback. The primary store is now
+// Supabase PostgreSQL (server/db-supabase.js). Mongoose is no longer a
+// dependency (removed from package.json); this file gracefully no-ops when
+// mongoose is not installed so `require('./db-mongo')` never crashes boot.
+let mongoose = null;
+try {
+  mongoose = require('mongoose');
+} catch {
+  console.warn('[db-mongo] mongoose not installed — legacy MongoDB driver disabled (using Supabase/SQLite).');
+  module.exports = {
+    init: async () => { throw new Error('Mongoose not installed — MongoDB disabled'); },
+    hydrateStore: async () => {},
+    isMongo: false,
+  };
+  // early return: keep file loadable without mongoose
+  return;
+}
 const crypto = require('crypto');
 
 const { Schema } = mongoose;

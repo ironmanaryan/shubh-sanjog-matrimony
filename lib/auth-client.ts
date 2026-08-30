@@ -1,24 +1,13 @@
 'use client';
 
-// Shared client-side auth helpers for the OTP flow.
-//
-// Production contract (PRD §2): every session is issued by the real API after
-// server-side OTP verification. In PRODUCTION builds an unreachable API still
-// blocks sign-in — the UI explains that the auth service cannot be reached.
-//
-// LOCAL PREVIEW FALLBACK (development only): when the Express API is offline
-// during local development/preview, auth falls back cleanly to a local
-// preview session instead of dead-ending the user:
-//   - send-otp resolves with the universal dev master code (123456), exactly
-//     like the server's own `demoOtp` convenience (see
-//     server/controllers/authController.js).
-//   - verify-otp accepts that master code and mints a clearly-marked local
-//     session token; role mirrors the server rule (`matchesAdminIdentifier`
-//     in server/middleware/rbac.js): identifiers containing "admin" or the
-//     designated DEFAULT_ADMIN_IDENTIFIERS get the admin role.
-//   - The token is NOT a JWT and will 401 against the real API once it comes
-//     back — sessions then surface normal auth errors. No fake data is ever
-//     minted in production.
+// Email OTP Auth — 6-digit OTP via Supabase Auth (primary) with Express fallback.
+// Implements per task:
+//   send: supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: true } })
+//   verify: supabase.auth.verifyOtp({ email, token, type: 'email' })
+// Auto-creates users on sign-in. Falls back to /api/auth/* when Supabase
+// unconfigured so local dev / SQLite preview never breaks.
+
+import { getSupabase, sendEmailOtp, verifyEmailOtp } from './supabase';
 
 export const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
@@ -135,20 +124,38 @@ export function looksLikeEmail(value: string): boolean {
 }
 
 export async function sendOtp(identifier: string): Promise<OtpSendResult> {
-  const posted = await fetchJsonWithFallback('/auth/send-otp', { identifier });
+  const trimmed = identifier.trim();
+  const isEmail = looksLikeEmail(trimmed);
 
-  // Backend unreachable — degrade to local preview auth in dev builds.
+  // 1) Supabase 6-digit Email OTP (primary) — auto-create user
+  if (isEmail) {
+    const supabase = getSupabase();
+    if (supabase) {
+      try {
+        const { error } = await sendEmailOtp(trimmed);
+        if (!error) return { ok: true, provider: 'supabase' };
+        // Supabase rate-limit or invalid email → surface clean message but still fallback
+        if (error.message?.toLowerCase().includes('rate')) {
+          return { ok: false, error: 'Too many requests. Please wait a minute and try again.' };
+        }
+        console.warn('[auth] Supabase Email OTP failed, falling back to API:', error.message);
+      } catch (e) {
+        console.warn('[auth] Supabase Email OTP exception, falling back:', e);
+      }
+    }
+  }
+
+  // 2) Fallback: Express API (supports phone + email OTP via legacy provider)
+  const posted = await fetchJsonWithFallback('/auth/send-otp', { identifier: trimmed });
+
   if (!posted.reachable) {
     if (!offlinePreviewAvailable()) return { ok: false, error: UNREACHABLE_ERROR };
-    console.warn(
-      '[auth] API unreachable — using local preview authentication. Start the backend with `npm run dev` (or `npm run server`) for real OTP flows.'
-    );
+    console.warn('[auth] API unreachable — using local preview (dev master code).');
     return { ok: true, demoOtp: DEV_MASTER_OTP, provider: 'dev-preview' };
   }
 
   const json = await posted.res.json().catch(() => ({}));
   if (!posted.res.ok) return { ok: false, error: json.error || 'Could not send OTP' };
-  // demoOtp is only ever present when the SERVER decides (dev + no provider).
   return { ok: true, demoOtp: json.demoOtp, provider: json.provider };
 }
 
@@ -166,6 +173,44 @@ export async function verifyOtp(
   code: string,
   details: VerifyOtpDetails = {}
 ): Promise<VerifyResult> {
+  const trimmedCode = code.trim();
+  // Enforce 6-digit numeric OTP per task
+  if (!/^\d{6}$/.test(trimmedCode)) {
+    return { ok: false, error: 'Please enter a valid 6-digit OTP.' };
+  }
+
+  const isEmail = looksLikeEmail(identifier);
+
+  // 1) Supabase 6-digit Email OTP verification (type: 'email')
+  if (isEmail) {
+    const supabase = getSupabase();
+    if (supabase) {
+      try {
+        const { data, error } = await verifyEmailOtp(identifier, trimmedCode);
+        if (!error && data?.session?.access_token && data?.user) {
+          const role = resolvePreviewRole(identifier);
+          const user: SessionUser = {
+            id: data.user.id,
+            identifier: identifier.trim().toLowerCase(),
+            role: (data.user.app_metadata?.role as string) || (data.user.user_metadata?.role as string) || role,
+            fullName: (data.user.user_metadata?.full_name as string) || details.fullName,
+          };
+          persistSession(data.session.access_token, user);
+          return { ok: true, role: user.role };
+        }
+        if (error) {
+          const msg = error.message?.toLowerCase() || '';
+          if (msg.includes('expired') || msg.includes('invalid')) {
+            return { ok: false, error: 'Invalid or expired OTP. Please request a new code.' };
+          }
+          console.warn('[auth] Supabase verifyOtp failed, falling back:', error.message);
+        }
+      } catch (e) {
+        console.warn('[auth] Supabase verifyOtp exception, falling back:', e);
+      }
+    }
+  }
+
   const posted = await fetchJsonWithFallback('/auth/verify-otp', { identifier, code, ...details });
 
   // Backend unreachable — degrade to local preview auth in dev builds.
@@ -191,6 +236,12 @@ export async function verifyOtp(
   if (!posted.res.ok || !json.token) return { ok: false, error: json.error || 'Invalid OTP' };
 
   const user = json.user || { id: identifier, identifier, role: 'customer' };
-  persistSession(json.token, user);
+  // Prefer Supabase token when server minted one, else JWT
+  const sessionToken = json.supabaseToken || json.token;
+  persistSession(sessionToken, user);
+  // If server returned both, stash JWT for legacy endpoints that still expect it
+  if (json.jwt && json.supabaseToken) {
+    try { localStorage.setItem('jwt_fallback', json.jwt); } catch {}
+  }
   return { ok: true, role: user.role || 'customer' };
 }

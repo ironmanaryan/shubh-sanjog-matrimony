@@ -47,8 +47,7 @@ const CATEGORIES: FaqCategory[] = [
         question: 'I paid twice by mistake. Will I get my money back?',
         answer: (
           <>
-            Yes — if two verified payments exist simultaneously for the same plan on the same account, the extra amount is refunded to the original UPI account within 7–10 business days of confirmation. See our{' '}
-            <a href="/refund" className="font-semibold text-[#7b102d] underline">Refund &amp; Cancellation Policy</a> for full rules.
+            If two verified payments exist simultaneously for the same plan on the same account, please contact our support team at {BUREAU.email} or {BUREAU.phone} — we will review the duplicate transaction and assist you within 7–10 business days.
           </>
         ),
       },
@@ -174,7 +173,6 @@ const CATEGORIES: FaqCategory[] = [
 const QUICK_LINKS = [
   { label: 'New here? Create your profile', href: '/register' },
   { label: 'Membership plans & pricing', href: '/#plans' },
-  { label: 'Refund & cancellation rules', href: '/refund' },
   { label: 'Privacy & document safety', href: '/privacy' },
 ];
 

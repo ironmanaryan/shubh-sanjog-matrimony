@@ -7,6 +7,7 @@ const db = require('../db');
 const { signPayload, verifyPayload, DEFAULT_TTL_SECONDS } = require('../utils/signing');
 const { isStaffRole } = require('../middleware/rbac');
 const { writeAuditLog, clientIp } = require('../utils/audit');
+const { uploadToCloudinary, isCloudinaryConfigured } = require('../utils/cloudinary');
 
 // Privacy §31: whenever a staff member accesses a document that belongs to
 // somebody else (receipts, IDs, photographs…), the access is audit-logged.
@@ -39,16 +40,31 @@ function createMulterForUser(userId) {
 }
 
 // controller used by route: router.post('/upload', verifyTokenMiddleware, upload.single('file'), uploadDocument)
+// All image/photo/PDF/document uploads are routed through Cloudinary when configured.
 async function uploadDocument(req, res) {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'file is required' });
     const id = uuidv4();
     const docType = (req.body && req.body.documentType) ? String(req.body.documentType) : 'other';
+
+    // Upload to Cloudinary when configured (images, photos, PDFs, docs)
+    let cloudinaryResult = null;
+    if (isCloudinaryConfigured()) {
+      try {
+        cloudinaryResult = await uploadToCloudinary(req.file.path, `shubh-sanjog/documents/${docType}`);
+      } catch (e) {
+        console.warn('cloudinary upload failed for document, using local:', e.message);
+      }
+    }
+
     const meta = {
       id,
       userId: req.user.id,
       originalName: req.file.originalname,
-      path: req.file.path,
+      path: cloudinaryResult?.secure_url || req.file.path,
+      // Cloudinary fields — persisted to Supabase when available
+      cloudinaryUrl: cloudinaryResult?.secure_url || null,
+      cloudinaryPublicId: cloudinaryResult?.public_id || null,
       mimetype: req.file.mimetype,
       size: req.file.size,
       uploadedAt: Date.now(),
@@ -56,7 +72,7 @@ async function uploadDocument(req, res) {
       documentType: docType,
     };
     store.documents.set(id, meta);
-    // persist to db
+    // persist to db (Supabase PostgreSQL primary)
     try {
       if (db._db) await db.saveDocument(db._db, meta);
     } catch (e) {
@@ -118,9 +134,20 @@ async function downloadDocument(req, res) {
 }
 
 function streamDocument(meta, res) {
+  // If Cloudinary URL is present, redirect to the Cloudinary CDN (signed/private)
+  if (meta.cloudinaryUrl && /^https?:\/\//.test(meta.cloudinaryUrl)) {
+    return res.redirect(302, meta.cloudinaryUrl);
+  }
+  if (meta.path && /^https?:\/\//.test(meta.path)) {
+    return res.redirect(302, meta.path);
+  }
   res.setHeader('Content-Type', meta.mimetype || 'application/octet-stream');
   res.setHeader('Content-Disposition', `attachment; filename="${meta.originalName}"`);
   res.setHeader('Cache-Control', 'private, no-store');
+  // Local file may have been cleaned up after Cloudinary upload — guard
+  if (!meta.path || !fs.existsSync(meta.path)) {
+    return res.status(404).json({ ok: false, error: 'File not found on server' });
+  }
   const stream = fs.createReadStream(meta.path);
   stream.on('error', (err) => {
     console.error('stream error', err);

@@ -79,8 +79,8 @@ export default function OtpInput({
   };
 
   return (
-    <div>
-      <div className="grid grid-cols-6 gap-2 sm:gap-3">
+    <div className="w-full">
+      <div className="grid grid-cols-6 gap-1.5 xs:gap-2 sm:gap-3">
         {value.map((digit, index) => (
           <input
             key={index}
@@ -90,18 +90,30 @@ export default function OtpInput({
             id={`${idPrefix}-${index}`}
             type="text"
             inputMode="numeric"
+            pattern="[0-9]*"
             autoComplete="one-time-code"
-            aria-label={`OTP digit ${index + 1}`}
-            maxLength={6}
+            enterKeyHint={index === 5 ? 'done' : 'next'}
+            aria-label={`OTP digit ${index + 1} of 6`}
+            maxLength={1}
             value={digit}
             disabled={disabled}
             onChange={(event) => handleChange(index, event.target.value)}
             onKeyDown={(event) => handleKeyDown(index, event)}
             onFocus={(event) => event.target.select()}
-            className="h-12 w-full rounded-xl border border-gold-200/80 bg-[#fffaf3] text-center text-lg font-bold text-[#2c0d16] outline-none transition focus:border-maroon-700 focus:ring-2 focus:ring-maroon-700/15 disabled:opacity-60 sm:h-14"
+            onPaste={(event) => {
+              const pasted = event.clipboardData.getData('text');
+              if (pasted && /\d/.test(pasted)) {
+                event.preventDefault();
+                handleChange(index, pasted);
+              }
+            }}
+            className="h-[48px] w-full touch-manipulation rounded-xl border border-[#e8d9c3] bg-white text-center text-xl font-bold tracking-widest text-[#2c0d16] shadow-sm outline-none transition-all duration-200 placeholder:text-[#c4b29e] focus:border-royal focus:bg-white focus:ring-4 focus:ring-royal/10 disabled:cursor-not-allowed disabled:opacity-60 sm:h-14 sm:text-2xl"
           />
         ))}
       </div>
+      <p className="mt-2 text-center text-xs text-[#a08a76] sm:text-left">
+        Enter the 6-digit code sent to your email
+      </p>
     </div>
   );
 }

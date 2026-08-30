@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import Image from 'next/image';
-import { Menu, X, Phone, MapPin, ShieldCheck, ChevronDown, UserRound, HelpCircle, FileText, RotateCcw } from 'lucide-react';
+import { Menu, X, Phone, MapPin, ShieldCheck, ChevronDown, UserRound, HelpCircle, FileText } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import FloatingWhatsApp from '@/components/layout/FloatingWhatsApp';
 import WhatsAppIcon from '@/components/ui/whatsapp-icon';
@@ -31,7 +31,6 @@ const moreLinks = [
   { label: 'FAQ', href: '/faq', icon: HelpCircle },
   { label: 'Privacy Policy', href: '/privacy', icon: ShieldCheck },
   { label: 'Terms & Conditions', href: '/terms', icon: FileText },
-  { label: 'Refund / Cancellation Policy', href: '/refund-policy', icon: RotateCcw },
 ];
 
 const viewLinks = [
@@ -103,7 +102,7 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
 
   return (
     <div className="min-h-screen bg-[#fffaf8] text-[#2c0d16]">
-      <header className="sticky top-0 z-50 border-b border-rose-100 bg-white/80 backdrop-blur-md">
+      <header className="sticky top-0 z-50 border-b border-rose-100 bg-white/95 backdrop-blur-md supports-[backdrop-filter]:bg-white/80 will-change-transform">
         <div className="mx-auto flex h-16 items-center gap-4 px-4 sm:h-[72px] sm:px-6 lg:h-[76px] lg:gap-6 lg:px-8">
           {/* Brand */}
           <div className="flex flex-1 justify-start">
@@ -230,14 +229,14 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
               Registration
             </Link>
 
-            {/* Hamburger trigger */}
+            {/* Hamburger trigger — 48px touch target */}
             <button
               type="button"
               aria-label="Open navigation menu"
               aria-controls="mobile-nav-drawer"
               aria-expanded={mobileOpen}
               onClick={() => setMobileOpen(true)}
-              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-rose-100 bg-white text-[#800020] transition-colors duration-200 hover:border-[#800020]/30 hover:bg-rose-50 xl:hidden"
+              className="inline-flex h-12 w-12 shrink-0 touch-manipulation items-center justify-center rounded-full border border-rose-100 bg-white text-[#800020] shadow-sm transition-all duration-200 hover:border-[#800020]/30 hover:bg-rose-50 active:scale-95 xl:hidden"
             >
               <Menu size={20} />
             </button>
@@ -254,14 +253,14 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
         }`}
       />
 
-      {/* Mobile slide-out drawer */}
+      {/* Mobile slide-out drawer — GPU-accelerated, 48px+ touch targets */}
       <aside
         id="mobile-nav-drawer"
         role="dialog"
         aria-modal="true"
         aria-label="Site navigation"
         inert={!mobileOpen}
-        className={`fixed inset-y-0 right-0 z-[70] flex w-[86%] max-w-xs flex-col bg-white shadow-2xl shadow-[#2c0d16]/25 transition-transform duration-300 ease-out xl:hidden ${
+        className={`fixed inset-y-0 right-0 z-[70] flex w-[86%] max-w-[320px] flex-col bg-white shadow-2xl shadow-[#2c0d16]/25 will-change-transform transform-gpu transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] xl:hidden ${
           mobileOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
       >
@@ -284,7 +283,7 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
             type="button"
             aria-label="Close navigation menu"
             onClick={() => setMobileOpen(false)}
-            className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-rose-100 bg-white text-[#800020] transition-colors hover:bg-rose-50"
+            className="inline-flex h-12 w-12 touch-manipulation items-center justify-center rounded-full border border-rose-100 bg-white text-[#800020] shadow-sm transition-all duration-200 hover:bg-rose-50 active:scale-95"
           >
             <X size={18} />
           </button>
@@ -296,7 +295,7 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
               key={item.label}
               href={item.href}
               onClick={() => setMobileOpen(false)}
-              className="rounded-xl px-4 py-3 text-[15px] font-medium text-[#4a2a35] transition-colors duration-150 hover:bg-rose-50 hover:text-[#800020]"
+              className="flex min-h-[44px] touch-manipulation items-center rounded-xl px-4 py-3 text-[15px] font-medium text-[#4a2a35] transition-colors duration-150 hover:bg-rose-50 hover:text-[#800020] active:bg-rose-50"
             >
               {item.label}
             </Link>
@@ -307,7 +306,7 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
             type="button"
             aria-expanded={legalOpen}
             onClick={() => setLegalOpen((open) => !open)}
-            className="mt-1 flex w-full items-center justify-between rounded-xl px-4 py-3 text-[15px] font-medium text-[#4a2a35] transition-colors duration-150 hover:bg-rose-50 hover:text-[#800020]"
+            className="mt-1 flex min-h-[44px] w-full touch-manipulation items-center justify-between rounded-xl px-4 py-3 text-[15px] font-medium text-[#4a2a35] transition-colors duration-150 hover:bg-rose-50 hover:text-[#800020] active:bg-rose-50"
           >
             More
             <ChevronDown size={16} className={`transition-transform duration-200 ${legalOpen ? 'rotate-180' : ''}`} />
@@ -416,7 +415,6 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
               <li><Link href="/privacy" className="transition hover:text-[#7b102d]">Privacy Policy</Link></li>
               <li><Link href="/terms" className="transition hover:text-[#7b102d]">Terms & Conditions</Link></li>
               <li><Link href="/terms#conduct" className="transition hover:text-[#7b102d]">Community Guidelines</Link></li>
-              <li><Link href="/refund" className="transition hover:text-[#7b102d]">Refund & Cancellation Policy</Link></li>
               <li><Link href="/faq" className="transition hover:text-[#7b102d]">FAQ</Link></li>
               <li><Link href="/contact" className="transition hover:text-[#7b102d]">Contact Us</Link></li>
             </ul>

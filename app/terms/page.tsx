@@ -68,7 +68,7 @@ export default function TermsPage() {
             'Recommended profiles are shared based on your stated partner preferences and availability of compatible profiles on the platform; we do not guarantee any minimum number of matches, responses, or a successful marriage.',
             'Memberships are personal to the registered member and their family’s use for that member’s alliance only. Reselling, sharing, scraping, or bulk-exporting profiles is prohibited.',
             'Expressing interest, shortlisting, and appointment booking features must be used respectfully; repeated one-sided interests or slot-blocking may be limited by the admin team.',
-            'Membership fees are non-refundable once verified and activated — please read our Refund & Cancellation Policy before purchasing.',
+            'Membership fees are non-refundable once verified and activated — please contact support before purchasing if you have questions.',
           ]}
         />
       </LegalSection>
@@ -140,7 +140,7 @@ export default function TermsPage() {
         <LegalList
           items={[
             'We may suspend or terminate any account that breaches these terms, provides false information, or receives verified complaints — with or without prior notice.',
-            'You may stop using the platform at any time; membership fees already verified and activated are non-refundable (see the Refund & Cancellation Policy).',
+            'You may stop using the platform at any time; membership fees already verified and activated are non-refundable.',
             'We may update these terms from time to time; the “Last updated” date above will change and continued use constitutes acceptance of the revised terms.',
           ]}
         />

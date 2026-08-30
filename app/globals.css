@@ -15,9 +15,12 @@
 
 html {
   scroll-behavior: smooth;
-  /* Decorative blurred orbs sit partially outside their sections; clip any
-     horizontal overflow so mobile never scrolls sideways. */
+  /* Prevent iOS text inflation and horizontal scroll */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
   overflow-x: clip;
+  /* Smooth touch scrolling on iOS */
+  -webkit-overflow-scrolling: touch;
 }
 
 body {
@@ -27,7 +30,17 @@ body {
   background: linear-gradient(180deg, #fffaf8 0%, #ffffff 100%);
   font-family: var(--font-inter), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+  /* Remove tap highlight on mobile for cleaner feel */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Ensure interactive elements are touch-friendly (min 44px) */
+button,
+a,
+[role='button'] {
+  touch-action: manipulation;
 }
 
 * {

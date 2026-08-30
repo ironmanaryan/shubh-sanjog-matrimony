@@ -17,7 +17,6 @@ export const BUREAU = {
 const LEGAL_LINKS = [
   { label: 'Terms & Conditions', href: '/terms' },
   { label: 'Privacy Policy', href: '/privacy' },
-  { label: 'Refund & Cancellation Policy', href: '/refund' },
   { label: 'Frequently Asked Questions', href: '/faq' },
 ];
 

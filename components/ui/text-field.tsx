@@ -54,7 +54,8 @@ const TextField = forwardRef<HTMLInputElement, TextFieldProps>(function TextFiel
             rest.onBlur?.(event);
           }}
           aria-invalid={Boolean(error)}
-          className={`w-full rounded-2xl bg-transparent px-4 pt-5 pb-2 text-sm text-[#2c0d16] outline-none placeholder:text-[#c4b29e] ${
+          // 16px base prevents iOS zoom; min-h 48px touch target; smooth focus
+          className={`w-full min-h-[48px] rounded-2xl bg-transparent px-4 pt-5 pb-2 text-base text-[#2c0d16] outline-none placeholder:text-[#c4b29e] touch-manipulation sm:text-sm ${
             className || ''
           }`}
           {...rest}

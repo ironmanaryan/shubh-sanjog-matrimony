@@ -21,6 +21,13 @@ export const metadata: Metadata = {
   description: 'Professional matrimony website for meaningful family connections and matchmaking.',
 };
 
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 5,
+  themeColor: '#800020',
+};
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${amaranth.variable} ${inter.variable}`}>

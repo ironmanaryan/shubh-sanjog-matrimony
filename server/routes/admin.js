@@ -517,17 +517,24 @@ router.post('/payments/reject', verifyTokenMiddleware, requirePermission('verify
 });
 
 // GET /api/admin/payments/:id/receipt — stream the uploaded receipt to staff
+// When Cloudinary is configured, receipts are stored as CDN URLs and we redirect.
 router.get('/payments/:id/receipt', verifyTokenMiddleware, requireStaffRole, auditTrail('VIEW_DOCUMENT', (req) => store.payments.get(req.params.id)?.userId || null), async (req, res) => {
   try {
     const payment = store.payments.get(req.params.id);
     if (!payment) return res.status(404).json({ ok: false, error: 'Payment not found' });
-    if (!payment.receiptPath || !fs.existsSync(payment.receiptPath)) {
+    const effectivePath = payment.cloudinaryUrl || payment.receiptPath;
+    if (!effectivePath) return res.status(404).json({ ok: false, error: 'Receipt file not found' });
+    // Cloudinary CDN URL — redirect so staff view via Cloudinary
+    if (/^https?:\/\//.test(effectivePath)) {
+      return res.redirect(302, effectivePath);
+    }
+    if (!fs.existsSync(effectivePath)) {
       return res.status(404).json({ ok: false, error: 'Receipt file not found' });
     }
 
     res.setHeader('Content-Type', payment.receiptMimetype || 'application/octet-stream');
     res.setHeader('Content-Disposition', `inline; filename="${payment.receiptName || 'receipt'}"`);
-    const stream = fs.createReadStream(payment.receiptPath);
+    const stream = fs.createReadStream(effectivePath);
     stream.on('error', () => res.status(500).end());
     stream.pipe(res);
   } catch (error) {

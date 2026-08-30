@@ -4,6 +4,15 @@ const { signToken } = require('../middleware/auth');
 const { matchesAdminIdentifier } = require('../middleware/rbac');
 const otpService = require('../utils/otp');
 
+// Supabase Auth — when configured, users are also synced to Supabase Auth
+let supabaseAdmin = null;
+try {
+  const { getSupabaseAdmin } = require('../utils/supabase');
+  supabaseAdmin = getSupabaseAdmin();
+} catch {
+  supabaseAdmin = null;
+}
+
 // Real OTP verification (PRD §2):
 //   - codes are generated server-side and delivered via the configured
 //     provider (Twilio / Fast2SMS / MSG91 / SMTP email) — see utils/otp.js
@@ -87,15 +96,48 @@ async function verifyOtp(req, res) {
     });
     if (!user) return res.status(400).json({ ok: false, error: 'identifier (mobile number) required' });
 
-    // persist to the database (MongoDB in production)
+    // persist to the database (Supabase PostgreSQL primary, SQLite fallback)
     try {
       if (user.id) {
         await db.createUser(db._db, user);
         // best-effort backfill of the optional email on repeat sign-ins
-        if (user.email) {
-          if (db._mode === 'mongodb') {
-            const { models } = db;
-            await models().User.updateOne({ id: user.id }, { $set: { email: user.email } });
+        if (user.email && db._db) {
+          try {
+            await db.backfillUserEmail(db._db, user.id, user.email);
+          } catch {}
+        }
+        // Sync to Supabase Auth when configured (creates auth user if not exists)
+        if (supabaseAdmin) {
+          try {
+            const client = supabaseAdmin;
+            if (client) {
+              // Upsert into auth.users via service role — best-effort
+              const supaUser = await client.auth.admin.getUserById
+                ? await client.auth.admin.getUserById(user.id).catch(() => null)
+                : null;
+              if (!supaUser?.data?.user) {
+                const payload = {
+                  userId: user.id,
+                  email: user.email || undefined,
+                  phone: !user.email && String(user.identifier).match(/^\d/) ? String(user.identifier) : undefined,
+                  user_metadata: { full_name: user.fullName, identifier: user.identifier, role: user.role },
+                  email_confirm: true,
+                  phone_confirm: true,
+                };
+                // Create via admin API if available (supabase-js v2 admin)
+                if (client.auth.admin?.createUser) {
+                  await client.auth.admin.createUser({
+                    email: payload.email,
+                    phone: payload.phone,
+                    email_confirm: true,
+                    phone_confirm: true,
+                    user_metadata: payload.user_metadata,
+                  }).catch(() => {});
+                }
+              }
+            }
+          } catch (e) {
+            console.warn('supabase sync failed (non-blocking):', e.message);
           }
         }
       }
@@ -106,9 +148,21 @@ async function verifyOtp(req, res) {
     const role = user.role || (matchesAdminIdentifier(identifier) ? 'admin' : 'customer');
     const token = signToken({ userId: user.id, role, identifier: user.identifier });
 
+    // If Supabase is configured, also mint a Supabase session token via sign-in
+    // (fallback to JWT when Supabase unavailable so local preview still works).
+    let supabaseToken = null;
+    if (supabaseAdmin && user.email) {
+      try {
+        const { data } = await supabaseAdmin.auth.signInWithOtp
+          ? await supabaseAdmin.auth.signInWithOtp({ email: user.email }).catch(() => ({ data: null }))
+          : { data: null };
+        if (data?.session?.access_token) supabaseToken = data.session.access_token;
+      } catch {}
+    }
+
     // return token and user (never the OTP internals)
     const safeUser = { ...user, role };
-    return res.json({ ok: true, token, user: safeUser });
+    return res.json({ ok: true, token: supabaseToken || token, supabaseToken, jwt: token, user: safeUser });
   } catch (err) {
     console.error('verifyOtp error', err);
     return res.status(500).json({ ok: false, error: 'Server error' });

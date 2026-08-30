@@ -3,21 +3,21 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { ArrowRight, KeyRound } from 'lucide-react';
-import Image from 'next/image';
+import { ArrowRight, Mail, ShieldCheck } from 'lucide-react';
 import OtpInput from '@/components/auth/OtpInput';
 import Button from '@/components/ui/button';
 import GlassCard from '@/components/ui/glass-card';
 import Loader from '@/components/ui/loader';
 import TextField from '@/components/ui/text-field';
-import { sendOtp, verifyOtp, getSession } from '@/lib/auth-client';
+import { sendOtp, verifyOtp, getSession, looksLikeEmail } from '@/lib/auth-client';
 
 const EMPTY_OTP = ['', '', '', '', '', ''];
 const RESEND_SECONDS = 30;
 
 export default function LoginPage() {
   const router = useRouter();
-  const [identifier, setIdentifier] = useState('');
+  const [email, setEmail] = useState('');
+  const [emailError, setEmailError] = useState<string | undefined>(undefined);
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState<string[]>(EMPTY_OTP);
   const [message, setMessage] = useState('');
@@ -27,7 +27,6 @@ export default function LoginPage() {
   const [devPreview, setDevPreview] = useState<string | null>(null);
   const otpCompleteRef = useRef(false);
 
-  // Already signed in? Route straight to the right workspace.
   useEffect(() => {
     const { token, user } = getSession();
     if (token && user) {
@@ -35,10 +34,9 @@ export default function LoginPage() {
     }
   }, [router]);
 
-  // Resend cooldown ticker.
   useEffect(() => {
     if (resendIn <= 0) return;
-    const timer = setTimeout(() => setResendIn((value) => Math.max(0, value - 1)), 1000);
+    const timer = setTimeout(() => setResendIn((v) => Math.max(0, v - 1)), 1000);
     return () => clearTimeout(timer);
   }, [resendIn]);
 
@@ -47,13 +45,23 @@ export default function LoginPage() {
     setMessageTone(tone);
   };
 
-  const handleSendOtp = async () => {
-    const value = identifier.trim();
-    if (!value) {
-      notify('Please enter your mobile number.', 'error');
-      return;
+  const validateEmail = (value: string): boolean => {
+    if (!value.trim()) {
+      setEmailError('Please enter your email address.');
+      return false;
     }
+    if (!looksLikeEmail(value)) {
+      setEmailError('Please enter a valid email address.');
+      return false;
+    }
+    setEmailError(undefined);
+    return true;
+  };
 
+  const handleSendOtp = async () => {
+    if (!validateEmail(email)) return;
+
+    const value = email.trim().toLowerCase();
     setBusy(true);
     try {
       const result = await sendOtp(value);
@@ -65,13 +73,11 @@ export default function LoginPage() {
       setOtp(EMPTY_OTP);
       setResendIn(RESEND_SECONDS);
       otpCompleteRef.current = false;
-      // The server only ever includes demoOtp in non-production environments
-      // with no SMS/email provider configured — never in production.
       setDevPreview(result.demoOtp || null);
       notify(
         result.demoOtp
-          ? `OTP sent to ${value}. Development code: ${result.demoOtp}`
-          : `OTP sent successfully to ${value}.`,
+          ? `OTP sent to ${value}. Dev code: ${result.demoOtp}`
+          : `6-digit code sent to ${value}. Check your inbox.`,
         'success'
       );
     } finally {
@@ -81,15 +87,15 @@ export default function LoginPage() {
 
   const completeLogin = async (code: string) => {
     if (otpCompleteRef.current) return;
-    if (code.length !== 6) {
-      notify('Please enter the full 6-digit OTP.', 'error');
+    if (!/^\d{6}$/.test(code)) {
+      notify('Please enter the complete 6-digit code.', 'error');
       return;
     }
 
     otpCompleteRef.current = true;
     setBusy(true);
     try {
-      const result = await verifyOtp(identifier.trim(), code);
+      const result = await verifyOtp(email.trim().toLowerCase(), code);
       if (!result.ok) {
         otpCompleteRef.current = false;
         notify(result.error, 'error');
@@ -105,109 +111,120 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="relative flex min-h-[calc(100vh-4rem)] items-center overflow-hidden px-4 py-12 sm:px-6 lg:px-8">
-      {/* Royal silk backdrop with warm gold glows */}
-      <div aria-hidden="true" className="absolute inset-0 bg-royal-silk" />
-      <div aria-hidden="true" className="absolute -left-24 top-10 h-72 w-72 rounded-full bg-luxe-gold/25 blur-3xl" />
-      <div aria-hidden="true" className="absolute -bottom-28 right-0 h-80 w-80 rounded-full bg-luxe-gold-deep/20 blur-3xl" />
+    <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden bg-[#fffaf8] px-4 py-6 sm:px-6 sm:py-12 lg:px-8">
+      {/* Background — subtle on mobile to keep fast, rich on desktop */}
+      <div aria-hidden="true" className="absolute inset-0 bg-royal-silk opacity-60 sm:opacity-100" />
+      <div aria-hidden="true" className="absolute -left-20 top-10 h-64 w-64 rounded-full bg-luxe-gold/20 blur-3xl sm:h-72 sm:w-72 sm:bg-luxe-gold/25" />
+      <div aria-hidden="true" className="absolute -bottom-20 right-0 h-64 w-64 rounded-full bg-luxe-gold-deep/15 blur-3xl sm:h-80 sm:w-80 sm:bg-luxe-gold-deep/20" />
 
-      <GlassCard className="relative mx-auto w-full max-w-5xl overflow-hidden !rounded-[32px] p-0">
+      <GlassCard className="relative mx-auto w-full max-w-5xl overflow-hidden !rounded-[24px] p-0 shadow-soft sm:!rounded-[32px]">
         <div className="grid lg:grid-cols-[0.9fr_1.1fr]">
-          {/* Brand panel */}
-          <div className="relative hidden flex-col justify-between overflow-hidden bg-gradient-to-br from-royal via-royal-deep to-[#3F0010] p-10 text-white lg:flex">
+          {/* Brand panel — hidden on mobile for speed & focus */}
+          <div className="relative hidden flex-col justify-between overflow-hidden bg-gradient-to-br from-royal via-royal-deep to-[#3F0010] p-8 text-white lg:flex lg:p-10">
             <div className="pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full bg-gold-400/20 blur-3xl" />
             <div className="pointer-events-none absolute -bottom-20 -left-10 h-56 w-56 rounded-full bg-gold-500/10 blur-3xl" />
 
-            <div className="inline-flex w-fit items-center gap-2 rounded-full border border-white/25 bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-gold-200">
-              <Image
-                src="/logo.png"
-                alt="Shubh Sanjog Matrimony logo"
-                width={48}
-                height={48}
-                className="h-5 w-5 rounded-full object-contain"
-              />
+            <div className="inline-flex w-fit items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-gold-200 backdrop-blur-sm">
+              <ShieldCheck size={14} className="text-gold-300" />
               Shubh Sanjog
             </div>
 
             <div>
-              <h1 className="max-w-sm text-4xl font-bold leading-tight tracking-tight">
+              <h1 className="max-w-sm font-display text-3xl font-bold leading-tight tracking-tight lg:text-4xl">
                 Welcome back.
               </h1>
-              <p className="mt-4 max-w-md text-base leading-7 text-white/80">
-                Log in to continue your matrimonial journey — review matches, manage preferences,
-                and stay connected with your family&apos;s next chapter.
+              <p className="mt-3 max-w-md text-sm leading-6 text-white/80 lg:mt-4 lg:text-base lg:leading-7">
+                Sign in with your email — we&apos;ll send a 6-digit code. No passwords, no hassle.
               </p>
             </div>
 
-            <ul className="space-y-3 text-sm text-white/75">
+            <ul className="space-y-2.5 text-sm text-white/75">
               <li className="flex items-center gap-2.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-gold-300" /> Passwordless OTP login
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-gold-300" /> 6-digit Email OTP
               </li>
               <li className="flex items-center gap-2.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-gold-300" /> Verified profiles only
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-gold-300" /> Auto account creation
               </li>
               <li className="flex items-center gap-2.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-gold-300" /> Private &amp; secure by design
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-gold-300" /> Private & secure
               </li>
             </ul>
           </div>
 
-          {/* Form panel */}
-          <div className="p-6 sm:p-10">
-            <h2 className="text-3xl font-bold tracking-tight text-[#2c0d16]">Sign in</h2>
-            <p className="mt-1.5 text-sm text-[#5a3743]">
-              Secure passwordless access via one-time code
-            </p>
+          {/* Form panel — full-bleed on mobile, padded on desktop */}
+          <div className="p-5 sm:p-8 lg:p-10">
+            <div className="mb-6 lg:mb-8">
+              <h2 className="font-display text-2xl font-bold tracking-tight text-[#2c0d16] sm:text-3xl">Sign in</h2>
+              <p className="mt-1.5 text-sm leading-5 text-[#5a3743] sm:text-[15px]">Secure 6-digit code sent to your email</p>
+            </div>
 
             <form
-              className="mt-8 space-y-5"
+              className="space-y-5"
               onSubmit={(event) => {
                 event.preventDefault();
                 if (!otpSent) void handleSendOtp();
                 else void completeLogin(otp.join(''));
               }}
+              noValidate
             >
               <TextField
-                id="identifier"
-                label="Mobile number"
-                type="tel"
-                value={identifier}
+                id="email"
+                label="Email address"
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                value={email}
                 disabled={otpSent || busy}
-                onChange={(event) => setIdentifier(event.target.value)}
-                placeholder="+91 98765 43210"
+                onChange={(event) => {
+                  setEmail(event.target.value);
+                  if (emailError) setEmailError(undefined);
+                }}
+                placeholder="you@example.com"
+                error={emailError}
+                hint={!emailError && !otpSent ? 'We’ll send a 6-digit code to this email.' : undefined}
               />
 
               {!otpSent ? (
                 <>
-                  <Button type="submit" disabled={busy} className="w-full py-3.5">
+                  <Button
+                    type="submit"
+                    disabled={busy}
+                    className="min-h-[48px] w-full touch-manipulation py-3.5 text-[15px] active:scale-[0.98] sm:py-4"
+                  >
                     {busy ? (
                       <>
                         <Loader variant="lotus" size="sm" />
-                        Sending…
+                        Sending code…
                       </>
                     ) : (
                       <>
-                        <KeyRound size={16} />
-                        Send OTP
+                        <Mail size={16} />
+                        Send 6-digit code
                       </>
                     )}
                   </Button>
-
-                  <p className="text-center text-xs font-medium text-[#8a7340]">
-                    We&apos;ll text a 6-digit one-time code to this number.
+                  <p className="text-center text-xs leading-4 text-[#8a7340] sm:text-sm">
+                    New here? Code auto-creates your account.
                   </p>
                 </>
               ) : (
                 <>
-                  <OtpInput
-                    idPrefix="login-otp"
-                    value={otp}
-                    onChange={setOtp}
-                    onComplete={(code) => void completeLogin(code)}
-                    disabled={busy}
-                  />
+                  <div className="space-y-1">
+                    <label className="block text-sm font-semibold text-[#4d2c36]">Enter 6-digit code sent to {email}</label>
+                    <OtpInput
+                      idPrefix="login-otp"
+                      value={otp}
+                      onChange={setOtp}
+                      onComplete={(code) => void completeLogin(code)}
+                      disabled={busy}
+                    />
+                  </div>
 
-                  <Button type="submit" disabled={busy} className="w-full py-3.5">
+                  <Button
+                    type="submit"
+                    disabled={busy || otp.join('').length !== 6}
+                    className="min-h-[48px] w-full touch-manipulation py-3.5 text-[15px] active:scale-[0.98] sm:py-4"
+                  >
                     {busy ? (
                       <>
                         <Loader variant="lotus" size="sm" />
@@ -215,13 +232,13 @@ export default function LoginPage() {
                       </>
                     ) : (
                       <>
-                        Verify &amp; Login
+                        Verify &amp; sign in
                         <ArrowRight size={16} />
                       </>
                     )}
                   </Button>
 
-                  <div className="flex items-center justify-between text-sm">
+                  <div className="flex flex-col gap-2 text-sm sm:flex-row sm:items-center sm:justify-between">
                     <button
                       type="button"
                       onClick={() => {
@@ -231,17 +248,17 @@ export default function LoginPage() {
                         otpCompleteRef.current = false;
                         notify('');
                       }}
-                      className="font-semibold text-[#5a3743] transition hover:text-maroon-700"
+                      className="min-h-[44px] touch-manipulation rounded-full px-4 py-2 text-left font-semibold text-[#5a3743] transition active:scale-[0.98] hover:text-royal hover:bg-royal/[0.06] sm:min-h-0 sm:px-0 sm:py-0 sm:hover:bg-transparent"
                     >
-                      Change mobile number
+                      Change email
                     </button>
                     <button
                       type="button"
                       disabled={resendIn > 0 || busy}
                       onClick={() => void handleSendOtp()}
-                      className="font-semibold text-maroon-700 transition hover:text-maroon-600 disabled:cursor-not-allowed disabled:text-[#b09a92]"
+                      className="min-h-[44px] touch-manipulation rounded-full bg-royal/5 px-4 py-2 font-semibold text-royal transition active:scale-[0.98] hover:bg-royal/10 disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-0 sm:bg-transparent sm:px-0 sm:py-0"
                     >
-                      {resendIn > 0 ? `Resend in ${resendIn}s` : 'Resend OTP'}
+                      {resendIn > 0 ? `Resend in ${resendIn}s` : 'Resend code'}
                     </button>
                   </div>
                 </>
@@ -250,12 +267,13 @@ export default function LoginPage() {
               {message && (
                 <div
                   role="status"
-                  className={`rounded-xl px-3.5 py-2.5 text-sm font-medium ${
+                  aria-live="polite"
+                  className={`rounded-xl px-3.5 py-3 text-sm font-medium leading-5 sm:py-2.5 ${
                     messageTone === 'error'
                       ? 'border border-red-200 bg-red-50 text-[#9b1f2f]'
                       : messageTone === 'success'
                         ? 'border border-emerald-200 bg-emerald-50 text-[#0a7d4c]'
-                        : 'border border-gold-200/70 bg-[#fffaf1] text-[#5a3743]'
+                        : 'border border-[#e8d9c3] bg-[#fffaf1] text-[#5a3743]'
                   }`}
                 >
                   {message}
@@ -263,16 +281,15 @@ export default function LoginPage() {
               )}
 
               {devPreview && (
-                <p className="rounded-xl bg-[#fff8e6] px-3.5 py-2.5 text-xs font-medium text-[#8a5a11]">
-                  Development environment (no SMS provider configured) — your verification code is{' '}
-                  <span className="font-mono font-bold">{devPreview}</span>. Configure a provider in <code>.env</code> to deliver codes by SMS/email.
+                <p className="rounded-xl bg-[#fff8e6] px-3.5 py-3 text-xs font-medium leading-5 text-[#8a5a11] sm:py-2.5">
+                  Dev mode — code: <span className="font-mono text-sm font-bold tracking-widest">{devPreview}</span>
                 </p>
               )}
 
-              <p className="pt-1 text-center text-sm text-[#5a3743]">
+              <p className="pt-1 text-center text-sm leading-5 text-[#5a3743]">
                 Don&apos;t have an account?{' '}
-                <Link href="/register" className="font-semibold text-maroon-700 hover:text-maroon-600">
-                  Register now
+                <Link href="/register" className="inline-flex min-h-[44px] items-center font-semibold text-royal underline-offset-4 hover:underline sm:min-h-0">
+                  Create account
                 </Link>
               </p>
             </form>

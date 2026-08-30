@@ -126,7 +126,7 @@ export default function ContactPage() {
                   <div>
                     <label htmlFor="contact-subject" className="mb-1.5 block text-xs font-bold uppercase tracking-[0.14em] text-[#7b102d]">Subject</label>
                     <select id="contact-subject" value={form.subject} onChange={(e) => update('subject', e.target.value)} className={inputClass}>
-                      {['General enquiry', 'Membership & plans', 'Profile verification', 'Payments & refunds', 'Technical support'].map((option) => (
+                      {['General enquiry', 'Membership & plans', 'Profile verification', 'Payments', 'Technical support'].map((option) => (
                         <option key={option} value={option}>{option}</option>
                       ))}
                     </select>

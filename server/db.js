@@ -1,27 +1,19 @@
-// Storage router — picks the persistence implementation from the environment.
+// Storage router — Supabase-first (PostgreSQL) with SQLite fallback.
 //
-//   MONGODB_URI set  -> MongoDB via Mongoose (production; PRD §1)
-//   otherwise        -> legacy SQLite file (local development fallback)
+//   SUPABASE_URL / NEXT_PUBLIC_SUPABASE_URL set -> Supabase PostgreSQL (primary)
+//   MONGODB_URI set                              -> legacy MongoDB (deprecated, kept for transition)
+//   otherwise                                   -> local SQLite (development fallback)
 //
-// RESILIENCE: if MONGODB_URI is configured but the server is unreachable
-// (e.g. laptop offline, Atlas IP not whitelisted during local preview), we
-// DO NOT crash the API — we log a loud warning and degrade to SQLite so
-// auth/dashboard endpoints keep answering ("Cannot reach the authentication
-// service" happens when nothing listens on :4000; this prevents exactly that).
-// Set DB_STRICT=1 to restore fail-fast behaviour (die if MongoDB is down).
-//
-// Both implementations expose the identical function surface, so controllers
-// and routes are storage-agnostic. `_db` carries the driver handle for BOTH
-// modes (mongoose connection for Mongo, sqlite handle for SQLite) so every
-// controller's `if (db._db)` guard means "a real database is attached" and all
-// writes persist inside the request that performs them (real-time CRUD).
+// RESILIENCE: if a configured primary is unreachable we degrade to SQLite so
+// auth/dashboard endpoints keep answering. Set DB_STRICT=1 to fail fast.
 
+const SUPABASE_CONNECT_TIMEOUT_MS = Number(process.env.SUPABASE_CONNECT_TIMEOUT_MS || 10_000);
 const MONGO_CONNECT_TIMEOUT_MS = Number(process.env.MONGO_CONNECT_TIMEOUT_MS || 10_000);
 
 const wrapper = {
-  /** Active storage mode: 'mongodb' | 'sqlite' | 'none' (before init). */
+  /** Active storage mode: 'supabase' | 'mongodb' | 'sqlite' | 'none' (before init). */
   _mode: 'none',
-  /** Driver handle: mongoose.connection (Mongo) or the sqlite wrapper. */
+  /** Driver handle: supabase client, mongoose.connection, or sqlite wrapper. */
   _db: null,
 
   /** True once init() succeeded — controllers use this to decide persistence. */
@@ -39,19 +31,17 @@ function bindImpl(impl) {
 }
 
 /**
- * Bounded connection attempt — a dead MongoDB URI must not hang server boot.
- * The abandoned mongoose promise gets a no-op catch so its eventual rejection
- * never becomes an unhandledRejection.
+ * Bounded connection attempt — a dead primary must not hang server boot.
  */
-async function connectMongoWithTimeout(mongo) {
+async function connectWithTimeout(impl, timeoutMs) {
   let timer;
   const timeout = new Promise((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error(`Timed out after ${MONGO_CONNECT_TIMEOUT_MS}ms`)),
-      MONGO_CONNECT_TIMEOUT_MS
+      () => reject(new Error(`Timed out after ${timeoutMs}ms`)),
+      timeoutMs
     );
   });
-  const connecting = mongo.init();
+  const connecting = impl.init();
   try {
     return await Promise.race([connecting, timeout]);
   } finally {
@@ -61,20 +51,37 @@ async function connectMongoWithTimeout(mongo) {
 }
 
 /**
- * Select + initialize the storage engine. Never leaves the wrapper half-bound:
- * routes are mounted by server/index.js only after this resolves (or throws,
- * which only happens when BOTH MongoDB and the SQLite fallback are unusable).
+ * Select + initialize the storage engine. Priority:
+ *   1) Supabase (when SUPABASE_URL / NEXT_PUBLIC_SUPABASE_URL is set)
+ *   2) MongoDB (legacy fallback, if MONGODB_URI set and mongoose available)
+ *   3) SQLite (local development fallback)
  */
 wrapper.init = async function init() {
   let impl = null;
 
-  if (process.env.MONGODB_URI) {
-    const mongo = require('./db-mongo');
+  const hasSupabase =
+    Boolean(process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL);
+  if (hasSupabase) {
+    const supabase = require('./db-supabase');
     try {
-      wrapper._db = await connectMongoWithTimeout(mongo);
+      wrapper._db = await connectWithTimeout(supabase, SUPABASE_CONNECT_TIMEOUT_MS);
+      impl = supabase;
+      wrapper._mode = 'supabase';
+      console.log('[db] Connected to Supabase PostgreSQL.');
+    } catch (err) {
+      console.warn(`[db] Supabase unavailable (${err && err.message ? err.message : err}).`);
+      if (process.env.DB_STRICT === '1') throw err;
+      console.warn('[db] Falling back to next storage engine so the API stays reachable.');
+    }
+  }
+
+  if (!impl && process.env.MONGODB_URI) {
+    try {
+      const mongo = require('./db-mongo');
+      wrapper._db = await connectWithTimeout(mongo, MONGO_CONNECT_TIMEOUT_MS);
       impl = mongo;
       wrapper._mode = 'mongodb';
-      console.log('[db] Connected to MongoDB.');
+      console.log('[db] Connected to MongoDB (legacy).');
     } catch (err) {
       console.warn(`[db] MongoDB unavailable (${err && err.message ? err.message : err}).`);
       if (process.env.DB_STRICT === '1') throw err;
@@ -91,8 +98,6 @@ wrapper.init = async function init() {
 
   bindImpl(impl);
 
-  // Pass the driver handle through: the SQLite implementation expects it as
-  // its first argument (`db.all(...)`), while the Mongo driver ignores it.
   await impl.hydrateStore(wrapper._db);
 
   return wrapper._db;

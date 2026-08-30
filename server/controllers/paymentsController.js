@@ -5,6 +5,7 @@ const multer = require('multer');
 const { store, getPlan, activateMembership, UPI_CONFIG } = require('../data/store');
 const db = require('../db');
 const { writeAuditLog } = require('../utils/audit');
+const { uploadToCloudinary, isCloudinaryConfigured } = require('../utils/cloudinary');
 
 // Payments (PRD §5): MANUAL UPI ONLY — no third-party payment gateway.
 //   1) Customer scans the business UPI QR (or pays to the UPI ID directly)
@@ -112,6 +113,16 @@ async function submitPayment(req, res) {
       }
     }
 
+    // All receipt screenshots route through Cloudinary when configured
+    let cloudinaryResult = null;
+    if (isCloudinaryConfigured()) {
+      try {
+        cloudinaryResult = await uploadToCloudinary(req.file.path, 'shubh-sanjog/receipts');
+      } catch (e) {
+        console.warn('cloudinary receipt upload failed, using local:', e.message);
+      }
+    }
+
     // amount must match the contract price from the plans table
     const payment = {
       id: uuidv4(),
@@ -120,7 +131,9 @@ async function submitPayment(req, res) {
       amount: Number(plan.price),
       upiId: UPI_CONFIG.upiId,
       utr,
-      receiptPath: req.file.path,
+      receiptPath: cloudinaryResult?.secure_url || req.file.path,
+      cloudinaryUrl: cloudinaryResult?.secure_url || null,
+      cloudinaryPublicId: cloudinaryResult?.public_id || null,
       receiptName: req.file.originalname,
       receiptMimetype: req.file.mimetype,
       receiptSize: req.file.size,
