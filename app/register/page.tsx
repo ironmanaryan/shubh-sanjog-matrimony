@@ -74,17 +74,37 @@ function RegisterPageInner() {
   const handleGoogleSignIn = async () => {
     const supabase = getSupabase()!;
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${origin}/auth/callback`,
-        queryParams: {
-          access_type: 'offline',
-          prompt: 'consent',
+    if (!origin) {
+      notify('Unable to determine site URL. Please refresh and try again.', 'error');
+      return;
+    }
+    setGoogleBusy(true);
+    try {
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${origin}/auth/callback`,
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'consent',
+          },
         },
-      },
-    });
-    if (error) console.error('OAuth Error:', error.message);
+      });
+      if (error) {
+        console.error('OAuth Error:', error.message);
+        notify(error.message || 'Google sign-in failed. Please try again.', 'error');
+        setGoogleBusy(false);
+        return;
+      }
+      // Supabase JS v2 with PKCE should auto-redirect, but handle data.url explicitly for reliability (iOS/Safari)
+      if (data?.url) {
+        window.location.href = data.url;
+      }
+    } catch (e) {
+      console.error('OAuth exception:', e);
+      notify('Google sign-in failed. Please try again.', 'error');
+      setGoogleBusy(false);
+    }
   };
 
   const handleSendOtp = async () => {
