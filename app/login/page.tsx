@@ -9,7 +9,8 @@ import Button from '@/components/ui/button';
 import GlassCard from '@/components/ui/glass-card';
 import Loader from '@/components/ui/loader';
 import TextField from '@/components/ui/text-field';
-import { sendOtp, verifyOtp, getSession, looksLikeEmail } from '@/lib/auth-client';
+import { verifyOtp, getSession, looksLikeEmail } from '@/lib/auth-client';
+import { getSupabase } from '@/lib/supabase';
 
 const EMPTY_OTP = ['', '', '', '', '', ''];
 const RESEND_SECONDS = 30;
@@ -24,7 +25,6 @@ export default function LoginPage() {
   const [messageTone, setMessageTone] = useState<'info' | 'error' | 'success'>('info');
   const [busy, setBusy] = useState(false);
   const [resendIn, setResendIn] = useState(0);
-  const [devPreview, setDevPreview] = useState<string | null>(null);
   const otpCompleteRef = useRef(false);
 
   useEffect(() => {
@@ -64,22 +64,34 @@ export default function LoginPage() {
     const value = email.trim().toLowerCase();
     setBusy(true);
     try {
-      const result = await sendOtp(value);
-      if (!result.ok) {
-        notify(result.error || 'Could not send OTP', 'error');
+      const supabase = getSupabase();
+      if (!supabase) {
+        console.error('[supabase] Cannot reach the authentication service — Supabase client not initialized. Check NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY');
+        notify('Cannot reach the authentication service. Please check your connection and try again.', 'error');
+        return;
+      }
+      const { data, error } = await supabase.auth.signInWithOtp({
+        email: value,
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
+      console.error('[supabase] signInWithOtp raw error object:', error);
+      console.log('[supabase] signInWithOtp raw response:', { data, error });
+      if (error) {
+        console.error('[supabase] signInWithOtp error JSON:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+        notify(error.message || 'Could not send OTP. Please try again.', 'error');
         return;
       }
       setOtpSent(true);
       setOtp(EMPTY_OTP);
       setResendIn(RESEND_SECONDS);
       otpCompleteRef.current = false;
-      setDevPreview(result.demoOtp || null);
-      notify(
-        result.demoOtp
-          ? `OTP sent to ${value}. Dev code: ${result.demoOtp}`
-          : `6-digit code sent to ${value}. Check your inbox.`,
-        'success'
-      );
+      notify('OTP sent to your email address. Please check your inbox.', 'success');
+    } catch (e) {
+      console.error('[supabase] signInWithOtp exception raw:', e);
+      const msg = e instanceof Error ? e.message : 'Could not send OTP. Please try again.';
+      notify(msg, 'error');
     } finally {
       setBusy(false);
     }
@@ -244,7 +256,6 @@ export default function LoginPage() {
                       onClick={() => {
                         setOtpSent(false);
                         setOtp(EMPTY_OTP);
-                        setDevPreview(null);
                         otpCompleteRef.current = false;
                         notify('');
                       }}
@@ -278,12 +289,6 @@ export default function LoginPage() {
                 >
                   {message}
                 </div>
-              )}
-
-              {devPreview && (
-                <p className="rounded-xl bg-[#fff8e6] px-3.5 py-3 text-xs font-medium leading-5 text-[#8a5a11] sm:py-2.5">
-                  Dev mode — code: <span className="font-mono text-sm font-bold tracking-widest">{devPreview}</span>
-                </p>
               )}
 
               <p className="pt-1 text-center text-sm leading-5 text-[#5a3743]">

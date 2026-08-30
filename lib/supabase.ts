@@ -1,21 +1,13 @@
-// Supabase client — browser singleton for Email OTP.
-// Uses .env.local:
-//   NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY
-// Falls back gracefully when env missing so local preview still works.
+// Supabase client — pure 6-digit Email OTP without runtime warnings.
+// Directly uses NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY with fallbacks.
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl =
-  process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || '';
-const supabaseAnonKey =
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-  process.env.SUPABASE_ANON_KEY ||
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  '';
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://culcgbqeengmhdlbfwuq.supabase.co';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_hmQbZmW7ZQQXLZFPuMQoUg_zWhDX0uQ';
 
 let _client: SupabaseClient | null = null;
 
 export function getSupabase(): SupabaseClient | null {
-  if (!supabaseUrl || !supabaseAnonKey) return null;
   if (_client) return _client;
   _client = createClient(supabaseUrl, supabaseAnonKey, {
     auth: {
@@ -36,7 +28,9 @@ export async function sendEmailOtp(email: string) {
   if (!client) throw new Error('Supabase not configured');
   return client.auth.signInWithOtp({
     email: email.trim().toLowerCase(),
-    options: { shouldCreateUser: true },
+    options: {
+      shouldCreateUser: true,
+    },
   });
 }
 

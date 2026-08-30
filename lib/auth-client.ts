@@ -18,9 +18,6 @@ const AUTH_TIMEOUT_MS = 8000;
 const UNREACHABLE_ERROR =
   'Cannot reach the authentication service. Please check your connection and try again.';
 
-/** Universal dev master code — mirrors process.env.DEV_MASTER_OTP on the API. */
-const DEV_MASTER_OTP = process.env.DEV_MASTER_OTP || '123456';
-
 /** Mirrors server/middleware/rbac.js DEFAULT_ADMIN_IDENTIFIERS (+contains rule). */
 const DEFAULT_ADMIN_IDENTIFIERS = ['admin@shubhsanjog.com', 'aryansadanshiv8@gmail.com'];
 
@@ -28,11 +25,6 @@ function resolvePreviewRole(identifier: string): string {
   const value = identifier.trim().toLowerCase();
   if (value.includes('admin') || DEFAULT_ADMIN_IDENTIFIERS.includes(value)) return 'admin';
   return 'customer';
-}
-
-/** Local preview mode exists ONLY outside production builds. */
-function offlinePreviewAvailable(): boolean {
-  return process.env.NODE_ENV !== 'production';
 }
 
 export type SessionUser = {
@@ -44,8 +36,6 @@ export type SessionUser = {
 
 export type OtpSendResult = {
   ok: boolean;
-  /** Shown ONLY when the server explicitly returns it (dev, no provider). */
-  demoOtp?: string;
   provider?: string;
   error?: string;
 };
@@ -127,36 +117,41 @@ export async function sendOtp(identifier: string): Promise<OtpSendResult> {
   const trimmed = identifier.trim();
   const isEmail = looksLikeEmail(trimmed);
 
-  // 1) Supabase 6-digit Email OTP (primary) — auto-create user
+  // Pure Supabase Email OTP — real authentication only
   if (isEmail) {
     const supabase = getSupabase();
-    if (supabase) {
-      try {
-        const { error } = await sendEmailOtp(trimmed);
-        if (!error) return { ok: true, provider: 'supabase' };
-        // Supabase rate-limit or invalid email → surface clean message but still fallback
-        if (error.message?.toLowerCase().includes('rate')) {
-          return { ok: false, error: 'Too many requests. Please wait a minute and try again.' };
-        }
-        console.warn('[auth] Supabase Email OTP failed, falling back to API:', error.message);
-      } catch (e) {
-        console.warn('[auth] Supabase Email OTP exception, falling back:', e);
+    if (!supabase) {
+      console.error('[supabase] Cannot reach the authentication service — Supabase client not initialized. Check NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY in .env.local');
+      return { ok: false, error: UNREACHABLE_ERROR };
+    }
+    try {
+      const { data, error } = await supabase.auth.signInWithOtp({
+        email: trimmed.toLowerCase(),
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
+      console.error('[supabase] signInWithOtp raw error object:', error);
+      console.log('[supabase] signInWithOtp raw response:', { data, error });
+      if (error) {
+        console.error('[supabase] signInWithOtp error JSON:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+        return { ok: false, error: error.message || 'Could not send OTP. Please try again.' };
       }
+      console.log('[supabase] signInWithOtp success — OTP sent to', trimmed);
+      return { ok: true, provider: 'supabase' };
+    } catch (e) {
+      console.error('[supabase] signInWithOtp exception raw:', e);
+      const msg = e instanceof Error ? e.message : 'Could not send OTP';
+      return { ok: false, error: msg };
     }
   }
 
-  // 2) Fallback: Express API (supports phone + email OTP via legacy provider)
+  // Non-email (phone) still uses Express API — no fake dev code
   const posted = await fetchJsonWithFallback('/auth/send-otp', { identifier: trimmed });
-
-  if (!posted.reachable) {
-    if (!offlinePreviewAvailable()) return { ok: false, error: UNREACHABLE_ERROR };
-    console.warn('[auth] API unreachable — using local preview (dev master code).');
-    return { ok: true, demoOtp: DEV_MASTER_OTP, provider: 'dev-preview' };
-  }
-
+  if (!posted.reachable) return { ok: false, error: UNREACHABLE_ERROR };
   const json = await posted.res.json().catch(() => ({}));
   if (!posted.res.ok) return { ok: false, error: json.error || 'Could not send OTP' };
-  return { ok: true, demoOtp: json.demoOtp, provider: json.provider };
+  return { ok: true, provider: json.provider };
 }
 
 export type VerifyResult =
@@ -181,56 +176,42 @@ export async function verifyOtp(
 
   const isEmail = looksLikeEmail(identifier);
 
-  // 1) Supabase 6-digit Email OTP verification (type: 'email')
+  // Pure Supabase Email OTP verification — real auth only
   if (isEmail) {
     const supabase = getSupabase();
-    if (supabase) {
-      try {
-        const { data, error } = await verifyEmailOtp(identifier, trimmedCode);
-        if (!error && data?.session?.access_token && data?.user) {
-          const role = resolvePreviewRole(identifier);
-          const user: SessionUser = {
-            id: data.user.id,
-            identifier: identifier.trim().toLowerCase(),
-            role: (data.user.app_metadata?.role as string) || (data.user.user_metadata?.role as string) || role,
-            fullName: (data.user.user_metadata?.full_name as string) || details.fullName,
-          };
-          persistSession(data.session.access_token, user);
-          return { ok: true, role: user.role };
-        }
-        if (error) {
-          const msg = error.message?.toLowerCase() || '';
-          if (msg.includes('expired') || msg.includes('invalid')) {
-            return { ok: false, error: 'Invalid or expired OTP. Please request a new code.' };
-          }
-          console.warn('[auth] Supabase verifyOtp failed, falling back:', error.message);
-        }
-      } catch (e) {
-        console.warn('[auth] Supabase verifyOtp exception, falling back:', e);
+    if (!supabase) {
+      console.error('[supabase] Cannot reach the authentication service — Supabase client not initialized');
+      return { ok: false, error: UNREACHABLE_ERROR };
+    }
+    try {
+      const { data, error } = await verifyEmailOtp(identifier, trimmedCode);
+      if (error) {
+        console.error('[supabase] verifyOtp raw error:', error);
+        console.error('[supabase] verifyOtp error JSON:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+        return { ok: false, error: error.message || 'Invalid or expired OTP. Please request a new code.' };
       }
+      if (data?.session?.access_token && data?.user) {
+        console.log('[supabase] verifyOtp success — session established for', identifier);
+        const role = resolvePreviewRole(identifier);
+        const user: SessionUser = {
+          id: data.user.id,
+          identifier: identifier.trim().toLowerCase(),
+          role: (data.user.app_metadata?.role as string) || (data.user.user_metadata?.role as string) || role,
+          fullName: (data.user.user_metadata?.full_name as string) || details.fullName,
+        };
+        persistSession(data.session.access_token, user);
+        return { ok: true, role: user.role };
+      }
+      return { ok: false, error: 'Invalid or expired OTP. Please request a new code.' };
+    } catch (e) {
+      console.error('[supabase] verifyOtp exception raw:', e);
+      const msg = e instanceof Error ? e.message : 'Verification failed';
+      return { ok: false, error: msg };
     }
   }
 
   const posted = await fetchJsonWithFallback('/auth/verify-otp', { identifier, code, ...details });
-
-  // Backend unreachable — degrade to local preview auth in dev builds.
-  if (!posted.reachable) {
-    if (!offlinePreviewAvailable()) return { ok: false, error: UNREACHABLE_ERROR };
-    if (String(code).trim() !== DEV_MASTER_OTP) return { ok: false, error: 'Invalid OTP' };
-
-    const role = resolvePreviewRole(identifier);
-    const user: SessionUser = {
-      id: `preview:${identifier}`,
-      identifier,
-      role,
-      ...(details.fullName ? { fullName: details.fullName } : {}),
-    };
-    // Clearly-marked pseudo-token: the real API will reject it with 401 once
-    // it returns, at which point normal auth errors resume.
-    persistSession(`preview.${btoa(unescape(encodeURIComponent(JSON.stringify(user))))}`, user);
-    console.warn('[auth] API unreachable — signed in with a LOCAL PREVIEW session.');
-    return { ok: true, role };
-  }
+  if (!posted.reachable) return { ok: false, error: UNREACHABLE_ERROR };
 
   const json = await posted.res.json().catch(() => ({}));
   if (!posted.res.ok || !json.token) return { ok: false, error: json.error || 'Invalid OTP' };

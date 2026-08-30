@@ -5,11 +5,8 @@ import Image from 'next/image';
 import { useEffect, useRef, useState } from 'react';
 import { KeyRound, ShieldAlert, ShieldCheck } from 'lucide-react';
 import OtpInput from '@/components/auth/OtpInput';
-import {
-  clearSession,
-  sendOtp,
-  verifyOtp,
-} from '@/lib/auth-client';
+import { clearSession, verifyOtp } from '@/lib/auth-client';
+import { getSupabase } from '@/lib/supabase';
 
 const EMPTY_OTP = ['', '', '', '', '', ''];
 const RESEND_SECONDS = 30;
@@ -47,27 +44,34 @@ export default function AdminSignInGate() {
   const sendOtpTo = async (raw: string) => {
     const value = raw.trim();
     if (!value) {
-      notify('Please enter your staff mobile number or email.', 'error');
+      notify('Please enter your staff email address.', 'error');
       return;
     }
 
     setBusy(true);
     try {
-      const result = await sendOtp(value);
-      if (!result.ok) {
-        notify(result.error || 'Could not send OTP', 'error');
+      const supabase = getSupabase();
+      if (!supabase) {
+        notify('Cannot reach the authentication service. Please check your connection and try again.', 'error');
+        return;
+      }
+      const { data, error } = await supabase.auth.signInWithOtp({
+        email: value,
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
+      console.error('[supabase] signInWithOtp raw error object:', error);
+      console.log('[supabase] signInWithOtp raw response:', { data, error });
+      if (error) {
+        notify(error.message || 'Could not send OTP. Please try again.', 'error');
         return;
       }
       setOtpSent(true);
       setOtp(EMPTY_OTP);
       setResendIn(RESEND_SECONDS);
       otpCompleteRef.current = false;
-      notify(
-        result.demoOtp
-          ? `OTP sent to ${value}. Your code: ${result.demoOtp}`
-          : `OTP sent successfully to ${value}.`,
-        'success'
-      );
+      notify('OTP sent to your email address. Please check your inbox.', 'success');
     } finally {
       setBusy(false);
     }
