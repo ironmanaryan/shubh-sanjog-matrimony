@@ -2,8 +2,8 @@
 // Directly uses NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY with fallbacks.
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://culcgbqeengmhdlbfwuq.supabase.co';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_hmQbZmW7ZQQXLZFPuMQoUg_zWhDX0uQ';
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://banrojskoitemzwosvfm.supabase.co';
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_MbbhZXowsxLRSwfyPgxiQw_9HwQJWjD';
 
 let _client: SupabaseClient | null = null;
 
