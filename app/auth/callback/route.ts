@@ -2,6 +2,8 @@ import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get('code');
@@ -29,23 +31,22 @@ export async function GET(request: Request) {
       }
     );
 
-    const { data: { session } } = await supabase.auth.exchangeCodeForSession(code);
+    const { data: { session }, error } = await supabase.auth.exchangeCodeForSession(code);
 
-    if (session?.user) {
-      // Check profile completion status
+    if (session?.user && !error) {
       const { data: profile } = await supabase
         .from('profiles')
         .select('is_completed')
         .eq('id', session.user.id)
-        .single();
+        .maybeSingle();
 
       if (!profile || !profile.is_completed) {
-        return NextResponse.redirect(`${requestUrl.origin}/register/fill-details?welcome=true`);
+        return NextResponse.redirect(new URL('/register/fill-details?welcome=true', request.url));
       } else {
-        return NextResponse.redirect(`${requestUrl.origin}/customer`);
+        return NextResponse.redirect(new URL('/customer', request.url));
       }
     }
   }
 
-  return NextResponse.redirect(requestUrl.origin);
+  return NextResponse.redirect(new URL('/register/fill-details?welcome=true', request.url));
 }
