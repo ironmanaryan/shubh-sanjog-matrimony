@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useRef, useState } from 'react';
+import { Suspense, useEffect, useRef, useState } from 'react';
 import { ArrowRight, Mail, Phone, ShieldCheck, ChevronDown, ChevronUp } from 'lucide-react';
 import OtpInput from '@/components/auth/OtpInput';
 import Button from '@/components/ui/button';
@@ -48,6 +48,30 @@ function RegisterPageInner() {
   const otpCompleteRef = useRef(false);
 
   const identifier = form.email.trim().toLowerCase();
+
+  useEffect(() => {
+    (async () => {
+      const supabase = getSupabase();
+      if (!supabase) return;
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      try {
+        const { data: profile } = await supabase.from('profiles').select('is_completed').eq('id', user.id).maybeSingle();
+        if (profile?.is_completed) {
+          router.replace('/customer');
+        } else if (profile && profile.is_completed === false) {
+          router.replace('/register/fill-details?welcome=true');
+        } else if (!profile) {
+          // No profile yet — check if user is via Google (has avatar) vs OTP
+          // For Google users with no profile, send to fill-details; for OTP users, stay on register to avoid loop
+          const provider = (user.app_metadata as Record<string, unknown>)?.['provider'] as string;
+          if (provider === 'google') {
+            router.replace('/register/fill-details?welcome=true');
+          }
+        }
+      } catch {}
+    })();
+  }, [router]);
 
   const handleFieldChange = (key: keyof typeof form, value: string) => {
     setForm((current) => ({ ...current, [key]: value }));
