@@ -42,26 +42,19 @@ function LoginPageInner() {
   const otpCompleteRef = useRef(false);
 
   const handleGoogleSignIn = async () => {
-    const supabase = getSupabase();
-    if (!supabase) {
-      notify('Cannot reach the authentication service. Please check your connection and try again.', 'error');
-      return;
-    }
-    setGoogleBusy(true);
-    try {
-      const redirectTo = redirectParam
-        ? `${window.location.origin}/auth/callback?next=${encodeURIComponent(redirectParam)}`
-        : `${window.location.origin}/auth/callback`;
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo,
+    const supabase = getSupabase()!;
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${origin}/auth/callback`,
+        queryParams: {
+          access_type: 'offline',
+          prompt: 'consent',
         },
-      });
-      if (error) console.error('Sign-in error:', error.message);
-    } finally {
-      setGoogleBusy(false);
-    }
+      },
+    });
+    if (error) console.error('OAuth Error:', error.message);
   };
 
   useEffect(() => {
