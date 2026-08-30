@@ -13,7 +13,8 @@
     "server": "node server/index.js",
     "smoke:auth": "node scripts/auth-smoke.js",
     "smoke:ui": "node scripts/ui-smoke.js",
-    "e2e:signin": "node scripts/e2e-signin.js"
+    "e2e:signin": "node scripts/e2e-signin.js",
+    "e2e:prod-google": "node scripts/prod-google-check.js"
   },
   "keywords": [],
   "author": "",
