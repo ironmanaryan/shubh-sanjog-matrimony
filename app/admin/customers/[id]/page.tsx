@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { API } from '@/lib/api-base';
 import { useRouter } from 'next/navigation';
 import { use, useCallback, useEffect, useState } from 'react';
 import {
@@ -23,7 +24,6 @@ import { clearSession, getSession, isNetworkError } from '@/lib/auth-client';
 import { buildBiodataPrintHtml } from '@/lib/biodata-print';
 import { Download, Printer } from 'lucide-react';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
 type Permissions = { addNotes: boolean } & Record<string, boolean>;
 

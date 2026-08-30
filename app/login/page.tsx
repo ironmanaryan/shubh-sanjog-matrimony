@@ -11,6 +11,7 @@ import Loader from '@/components/ui/loader';
 import TextField from '@/components/ui/text-field';
 import { verifyOtp, looksLikeEmail } from '@/lib/auth-client';
 import { getSupabase } from '@/lib/supabase';
+import { signInWithGoogle } from '@/lib/google-auth';
 
 const EMPTY_OTP = ['', '', '', '', '', ''];
 const RESEND_SECONDS = 30;
@@ -42,40 +43,36 @@ function LoginPageInner() {
   const otpCompleteRef = useRef(false);
 
   const handleGoogleSignIn = async () => {
-    const supabase = getSupabase()!;
-    const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    console.log('[OAuth] login origin:', origin);
-    if (!origin) {
-      notify('Unable to determine site URL. Please refresh and try again.', 'error');
-      return;
-    }
     setGoogleBusy(true);
-    try {
-      const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${origin}/auth/callback`,
-        },
-      });
-      console.log('[OAuth] login result:', { hasUrl: !!data?.url, error: error?.message });
-      if (error) {
-        console.error('OAuth Error:', error.message);
-        notify(error.message || 'Google sign-in failed. Please try again.', 'error');
-        setGoogleBusy(false);
-        return;
-      }
-      if (data?.url) {
-        window.location.replace(data.url);
-      } else {
-        notify('Google sign-in failed - no redirect URL.', 'error');
-        setGoogleBusy(false);
-      }
-    } catch (e) {
-      console.error('OAuth exception:', e);
-      notify('Google sign-in failed. Please try again.', 'error');
+    // `redirectParam` is stashed in a cookie by the helper: Supabase matches
+    // redirect URLs against an allow-list, so it cannot ride along as a query
+    // param on /auth/callback.
+    const result = await signInWithGoogle(redirectParam);
+    if (!result.ok) {
+      notify(result.error || 'Google sign-in failed. Please try again.', 'error');
       setGoogleBusy(false);
     }
+    // On success the browser is navigating away — leave the button busy so it
+    // cannot be clicked twice during the redirect.
   };
+
+  // Surface failures that /auth/callback bounced back to us.
+  useEffect(() => {
+    const failure = searchParams.get('error');
+    if (!failure) return;
+    const detail = searchParams.get('detail');
+    if (failure === 'config') {
+      notify(
+        detail || 'Sign-in is not configured on this deployment. Please contact support.',
+        'error'
+      );
+      return;
+    }
+    notify(
+      detail || 'Sign-in could not be completed. Please try again.',
+      'error'
+    );
+  }, [searchParams]);
 
   useEffect(() => {
     if (resendIn <= 0) return;
@@ -116,7 +113,7 @@ function LoginPageInner() {
       const { data, error } = await supabase.auth.signInWithOtp({
         email: value,
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          emailRedirectTo: `${window.location.origin}/auth/complete`,
         },
       });
       console.error('[supabase] signInWithOtp raw error object:', error);

@@ -1,11 +1,11 @@
 'use client';
 
 import Image from 'next/image';
+import { API } from '@/lib/api-base';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { CheckCircle2, Copy, FileUp, Info, ShieldCheck, X } from 'lucide-react';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
 const FALLBACK_UPI = { upiId: 'deepakrajmeh@okaxis', payeeName: 'Shubh Sanjog Matrimony' };
 

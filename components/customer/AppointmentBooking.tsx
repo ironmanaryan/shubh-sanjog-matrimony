@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { API } from '@/lib/api-base';
 import RequestMeetingButton from '@/components/customer/RequestMeetingButton';
 import { buildMeetingRequestMessage } from '@/lib/whatsapp';
 import { getSession } from '@/lib/auth-client';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
 type SlotDay = {
   date: string;

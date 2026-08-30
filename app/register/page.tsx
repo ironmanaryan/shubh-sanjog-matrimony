@@ -12,6 +12,7 @@ import Loader from '@/components/ui/loader';
 import TextField from '@/components/ui/text-field';
 import { getSession, looksLikeEmail } from '@/lib/auth-client';
 import { getSupabase } from '@/lib/supabase';
+import { signInWithGoogle } from '@/lib/google-auth';
 
 const EMPTY_OTP = ['', '', '', '', '', ''];
 
@@ -96,41 +97,10 @@ function RegisterPageInner() {
   };
 
   const handleGoogleSignIn = async () => {
-    const supabase = getSupabase()!;
-    const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    console.log('[OAuth] origin:', origin, 'supabaseUrl:', (supabase as unknown as { supabaseUrl?: string })?.supabaseUrl || 'unknown');
-    if (!origin) {
-      notify('Unable to determine site URL. Please refresh and try again.', 'error');
-      return;
-    }
     setGoogleBusy(true);
-    try {
-      // Use minimal redirectTo without queryParams for iOS reliability — Supabase handles offline/consent via dashboard config
-      const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${origin}/auth/callback`,
-        },
-      });
-      console.log('[OAuth] signInWithOAuth result:', { hasUrl: !!data?.url, url: data?.url?.slice(0,120), error: error?.message });
-      if (error) {
-        console.error('OAuth Error:', error.message);
-        notify(error.message || 'Google sign-in failed. Please try again.', 'error');
-        setGoogleBusy(false);
-        return;
-      }
-      if (data?.url) {
-        console.log('[OAuth] redirecting to:', data.url.slice(0,120));
-        // Use replace for cleaner history and to avoid Next.js prefetch interference
-        window.location.replace(data.url);
-      } else {
-        console.error('[OAuth] no url returned', data);
-        notify('Google sign-in failed - no redirect URL. Please try again.', 'error');
-        setGoogleBusy(false);
-      }
-    } catch (e) {
-      console.error('OAuth exception:', e);
-      notify('Google sign-in failed. Please try again.', 'error');
+    const result = await signInWithGoogle(redirectParam);
+    if (!result.ok) {
+      notify(result.error || 'Google sign-in failed. Please try again.', 'error');
       setGoogleBusy(false);
     }
   };

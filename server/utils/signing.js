@@ -3,8 +3,8 @@
 // granted only via a signed token that encodes the file id, the grantee and an
 // expiry. The signature uses the same secret as JWTs.
 const crypto = require('crypto');
+const { getJwtSecret } = require('../secrets');
 
-const SECRET = process.env.JWT_SECRET || 'dev-secret-please-change';
 // Short-lived signed access (privacy spec §30): documents are never public —
 // a signed URL grants at most 15 minutes of access, configurable via env.
 const DEFAULT_TTL_SECONDS = Number(process.env.SIGNED_URL_TTL_SECONDS || 900);
@@ -14,7 +14,7 @@ function b64url(input) {
 }
 
 function hmac(data) {
-  return crypto.createHmac('sha256', SECRET).update(data).digest('base64url');
+  return crypto.createHmac('sha256', getJwtSecret()).update(data).digest('base64url');
 }
 
 // payload: plain object (kept small — docId, userId, purpose)

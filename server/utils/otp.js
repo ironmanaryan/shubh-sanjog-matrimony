@@ -15,6 +15,7 @@
 //   - The static demo master code is accepted ONLY outside production.
 const crypto = require('crypto');
 const db = require('../db');
+const { getJwtSecret, isProduction } = require('../secrets');
 
 const OTP_TTL_MS = Math.max(5 * 60 * 1000, Math.min(Number(process.env.OTP_TTL_MS) || 5 * 60 * 1000, 10 * 60 * 1000)); // 5–10 min
 const MAX_SENDS_PER_WINDOW = Number(process.env.OTP_MAX_SENDS) || 3;
@@ -22,8 +23,28 @@ const SEND_WINDOW_MS = 10 * 60 * 1000;
 const MAX_VERIFY_ATTEMPTS = 5;
 
 function hashCode(identifier, code) {
-  const secret = process.env.JWT_SECRET || process.env.APP_SECRET || 'shubh-sanjog-dev-secret';
+  // Shares the app secret so OTP hashes are not signed with a publicly known
+  // constant. Throws in production when JWT_SECRET is unset — deliberate: a
+  // guessable pepper would make stored code hashes trivially crackable.
+  const secret = getJwtSecret();
   return crypto.createHash('sha256').update(`${String(identifier).toLowerCase()}|${code}|${secret}`).digest('hex');
+}
+
+/**
+ * True when the static development master code may be accepted.
+ *
+ * Requires BOTH a non-production environment AND an explicit opt-in
+ * (ALLOW_DEV_OTP=1). Previously `NODE_ENV !== 'production'` alone was enough,
+ * which silently enabled a universal bypass on any deployment that forgot to
+ * set NODE_ENV — for example a self-hosted Node process.
+ */
+function devMasterOtpEnabled() {
+  return !isProduction() && process.env.ALLOW_DEV_OTP === '1';
+}
+
+/** The development master code, only meaningful when devMasterOtpEnabled(). */
+function devMasterOtp() {
+  return process.env.DEV_MASTER_OTP || '123456';
 }
 
 function generateCode() {
@@ -144,9 +165,9 @@ async function issueOtp(identifierRaw) {
   await db.saveOtp({ identifier, codeHash: hashCode(identifier, code), purpose: 'login', ttlMs: OTP_TTL_MS });
 
   const provider = activeProvider();
-  if (!provider && process.env.NODE_ENV !== 'production') {
+  if (!provider && !isProduction()) {
     // Development convenience: no provider configured — surface the code in the
-    // server log; the API response carries the master code instead.
+    // server log and let the API response carry the master code.
     console.log(`[otp] DEV mode (no provider): code for ${identifier} is ${code}`);
     return { ok: true, expiresInMs: OTP_TTL_MS };
   }
@@ -191,6 +212,8 @@ module.exports = {
   generateCode,
   hashCode,
   activeProvider,
+  devMasterOtpEnabled,
+  devMasterOtp,
   OTP_TTL_MS,
   MAX_SENDS_PER_WINDOW,
   MAX_VERIFY_ATTEMPTS,

@@ -8,6 +8,7 @@ const { signPayload, verifyPayload, DEFAULT_TTL_SECONDS } = require('../utils/si
 const { isStaffRole } = require('../middleware/rbac');
 const { writeAuditLog, clientIp } = require('../utils/audit');
 const { uploadToCloudinary, isCloudinaryConfigured } = require('../utils/cloudinary');
+const paths = require('../paths');
 
 // Privacy §31: whenever a staff member accesses a document that belongs to
 // somebody else (receipts, IDs, photographs…), the access is audit-logged.
@@ -22,12 +23,24 @@ function auditStaffDocumentView(req, meta, via) {
   }).catch(() => {});
 }
 
+// Accepted document types — IDs, photographs and proofs. Kept strict so the
+// upload endpoint cannot be used to store arbitrary executables.
+const ALLOWED_DOCUMENT_MIME = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'application/pdf',
+]);
+
+const ALLOWED_DOCUMENT_EXT = /\.(jpe?g|png|webp|pdf)$/i;
+
 // configure multer storage per-user (used by the route wrapper)
 function createMulterForUser(userId) {
   const storage = multer.diskStorage({
     destination: function (req, file, cb) {
-      const base = path.join(__dirname, '..', 'uploads', 'private', userId);
-      fs.mkdirSync(base, { recursive: true });
+      // Root-anchored: __dirname is unreliable once bundled by Next.js.
+      const base = path.join(paths.privateUploadsDir, userId);
+      fs.mkdirSync(/* turbopackIgnore: true */ base, { recursive: true });
       cb(null, base);
     },
     filename: function (req, file, cb) {
@@ -36,7 +49,18 @@ function createMulterForUser(userId) {
     },
   });
 
-  return multer({ storage });
+  return multer({
+    storage,
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB cap — matches the payments uploader
+    fileFilter(req, file, cb) {
+      const okMime = ALLOWED_DOCUMENT_MIME.has(file.mimetype);
+      const okExt = ALLOWED_DOCUMENT_EXT.test(file.originalname || '');
+      if (!okMime || !okExt) {
+        return cb(new Error('Unsupported file type. Upload a JPG, PNG, WEBP or PDF.'));
+      }
+      return cb(null, true);
+    },
+  });
 }
 
 // controller used by route: router.post('/upload', verifyTokenMiddleware, upload.single('file'), uploadDocument)

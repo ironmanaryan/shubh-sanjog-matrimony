@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState, useRef, useEffect } from 'react';
+import { API } from '@/lib/api-base';
 
 type DocItem = { id: string; name: string; uploadedAt: number; status: 'Pending' | 'Approved' | 'Rejected'; documentType?: string | null };
 
@@ -29,7 +30,6 @@ export default function DocumentsCenter({ initial }: { initial?: DocItem[] }) {
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [docType, setDocType] = useState<string>('identity');
 
-  const API = (process.env.NEXT_PUBLIC_API_URL as string) || 'http://localhost:4000/api';
 
   useEffect(() => {
     async function loadDocs() {

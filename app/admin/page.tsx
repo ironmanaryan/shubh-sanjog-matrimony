@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { API } from '@/lib/api-base';
 import Image from 'next/image';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -22,7 +23,6 @@ import {
 import AdminSignInGate from '@/components/admin/AdminSignInGate';
 import { clearSession, getSession, isNetworkError } from '@/lib/auth-client';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
 // Consolidated admin panel (scope PDF §18–§31): one route with permission-gated
 // tabs — Profile Review, Document Verification, UPI Payment Approvals, Matching

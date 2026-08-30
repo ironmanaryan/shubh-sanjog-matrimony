@@ -6,6 +6,7 @@ const { store, getPlan, activateMembership, UPI_CONFIG } = require('../data/stor
 const db = require('../db');
 const { writeAuditLog } = require('../utils/audit');
 const { uploadToCloudinary, isCloudinaryConfigured } = require('../utils/cloudinary');
+const paths = require('../paths');
 
 // Payments (PRD §5): MANUAL UPI ONLY — no third-party payment gateway.
 //   1) Customer scans the business UPI QR (or pays to the UPI ID directly)
@@ -19,8 +20,9 @@ const { uploadToCloudinary, isCloudinaryConfigured } = require('../utils/cloudin
 function createMulterForUser(userId) {
   const storage = multer.diskStorage({
     destination: function (req, file, cb) {
-      const base = path.join(__dirname, '..', 'uploads', 'receipts', userId);
-      fs.mkdirSync(base, { recursive: true });
+      // Root-anchored: __dirname is unreliable once bundled by Next.js.
+      const base = path.join(paths.receiptUploadsDir, userId);
+      fs.mkdirSync(/* turbopackIgnore: true */ base, { recursive: true });
       cb(null, base);
     },
     filename: function (req, file, cb) {

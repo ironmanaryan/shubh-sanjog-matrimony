@@ -6,6 +6,7 @@ import { Menu, X, Phone, MapPin, ShieldCheck, ChevronDown, UserRound, HelpCircle
 import { useEffect, useRef, useState } from 'react';
 import FloatingWhatsApp from '@/components/layout/FloatingWhatsApp';
 import WhatsAppIcon from '@/components/ui/whatsapp-icon';
+import AuthButtons from '@/components/auth/AuthButtons';
 
 // ─── Developer credit (footer) ───────────────────────────────────────────────
 // Modular toggle: set `enabled` to false to hide the credit site-wide without
@@ -214,20 +215,10 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
 
             <span aria-hidden="true" className="mx-1 hidden h-5 w-px bg-rose-100 xl:block" />
 
-            <Link
-              href="/login"
-              className="hidden whitespace-nowrap rounded-full border border-[#800020]/25 px-5 py-2.5 text-sm font-semibold text-[#800020] transition-all duration-200 hover:border-[#800020]/60 hover:bg-[#800020]/[0.04] xl:inline-flex"
-            >
-              Login
-            </Link>
-            <Link
-              href="/register"
-              aria-label="Registration / Customer Access"
-              title="Registration / Customer Access"
-              className="hidden whitespace-nowrap rounded-full bg-[#800020] px-5 py-2.5 text-sm font-semibold text-white shadow-md shadow-[#800020]/25 transition-all duration-300 hover:-translate-y-0.5 hover:bg-[#68001a] hover:shadow-lg hover:shadow-[#800020]/30 xl:inline-flex"
-            >
-              Registration
-            </Link>
+            {/* Swaps between "Login / Registration" and the signed-in account
+                menu. Driven by the Supabase session, so Google sign-in is
+                reflected immediately instead of only after a hard reload. */}
+            <AuthButtons variant="desktop" />
 
             {/* Hamburger trigger — 48px touch target */}
             <button
@@ -329,22 +320,7 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
         </nav>
 
         <div className="mt-auto space-y-3 border-t border-rose-100 px-5 py-5">
-          {/* Primary CTA — full-width, most prominent action */}
-          <Link
-            href="/register"
-            aria-label="Registration / Customer Access"
-            onClick={() => setMobileOpen(false)}
-            className="inline-flex w-full items-center justify-center rounded-full bg-[#800020] px-4 py-3 text-sm font-bold text-white shadow-md shadow-[#800020]/25 transition-colors hover:bg-[#68001a]"
-          >
-            Registration / Customer Access
-          </Link>
-          <Link
-            href="/login"
-            onClick={() => setMobileOpen(false)}
-            className="inline-flex w-full items-center justify-center rounded-full border border-[#800020]/25 px-4 py-2.5 text-sm font-semibold text-[#800020] transition-colors hover:border-[#800020]/60 hover:bg-[#800020]/[0.04]"
-          >
-            Login
-          </Link>
+          <AuthButtons variant="mobile" onNavigate={() => setMobileOpen(false)} />
           <div>
             <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-[#b08a95]">Demo access</p>
             <div className="mt-2 flex items-center gap-4">

@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { API } from '@/lib/api-base';
 import { useCallback, useEffect, useState } from 'react';
 import {
   ArrowLeft,
@@ -15,7 +16,6 @@ import {
 import AdminSignInGate from '@/components/admin/AdminSignInGate';
 import { clearSession, getSession, isNetworkError } from '@/lib/auth-client';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
 // Dedicated Admin Inquiries management route — every Contact Us submission
 // lands here for triage (New → In Progress → Resolved).

@@ -1,19 +1,21 @@
 // Storage router — Supabase-first (PostgreSQL) with SQLite fallback.
 //
 //   SUPABASE_URL / NEXT_PUBLIC_SUPABASE_URL set -> Supabase PostgreSQL (primary)
-//   MONGODB_URI set                              -> legacy MongoDB (deprecated, kept for transition)
 //   otherwise                                   -> local SQLite (development fallback)
 //
-// RESILIENCE: if a configured primary is unreachable we degrade to SQLite so
+// The legacy MongoDB driver was removed: mongoose was never installed, so it
+// could never have been selected at runtime, and keeping it forced the bundler
+// to resolve a dependency that does not exist (breaking `next build`).
+//
+// RESILIENCE: if the Supabase primary is unreachable we degrade to SQLite so
 // auth/dashboard endpoints keep answering. Set DB_STRICT=1 to fail fast.
 
 const SUPABASE_CONNECT_TIMEOUT_MS = Number(process.env.SUPABASE_CONNECT_TIMEOUT_MS || 10_000);
-const MONGO_CONNECT_TIMEOUT_MS = Number(process.env.MONGO_CONNECT_TIMEOUT_MS || 10_000);
 
 const wrapper = {
   /** Active storage mode: 'supabase' | 'mongodb' | 'sqlite' | 'none' (before init). */
   _mode: 'none',
-  /** Driver handle: supabase client, mongoose.connection, or sqlite wrapper. */
+  /** Driver handle: supabase client or sqlite wrapper. */
   _db: null,
 
   /** True once init() succeeded — controllers use this to decide persistence. */
@@ -53,8 +55,7 @@ async function connectWithTimeout(impl, timeoutMs) {
 /**
  * Select + initialize the storage engine. Priority:
  *   1) Supabase (when SUPABASE_URL / NEXT_PUBLIC_SUPABASE_URL is set)
- *   2) MongoDB (legacy fallback, if MONGODB_URI set and mongoose available)
- *   3) SQLite (local development fallback)
+ *   2) SQLite (local development fallback)
  */
 wrapper.init = async function init() {
   let impl = null;
@@ -72,20 +73,6 @@ wrapper.init = async function init() {
       console.warn(`[db] Supabase unavailable (${err && err.message ? err.message : err}).`);
       if (process.env.DB_STRICT === '1') throw err;
       console.warn('[db] Falling back to next storage engine so the API stays reachable.');
-    }
-  }
-
-  if (!impl && process.env.MONGODB_URI) {
-    try {
-      const mongo = require('./db-mongo');
-      wrapper._db = await connectWithTimeout(mongo, MONGO_CONNECT_TIMEOUT_MS);
-      impl = mongo;
-      wrapper._mode = 'mongodb';
-      console.log('[db] Connected to MongoDB (legacy).');
-    } catch (err) {
-      console.warn(`[db] MongoDB unavailable (${err && err.message ? err.message : err}).`);
-      if (process.env.DB_STRICT === '1') throw err;
-      console.warn('[db] Falling back to local SQLite so the API stays reachable.');
     }
   }
 

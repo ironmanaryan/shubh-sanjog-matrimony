@@ -1,14 +1,39 @@
 const path = require('path');
 const fs = require('fs');
-const sqlite3 = require('sqlite3');
-const { open } = require('sqlite');
+const paths = require('./paths');
 
-const DB_PATH = path.join(__dirname, 'data', 'database.sqlite');
+// The native sqlite3 binding is a development convenience only. On Vercel the
+// project directory is read-only and Supabase is the configured primary, so a
+// missing/unloadable native module must degrade gracefully rather than crash
+// the whole API bundle at import time.
+let sqlite3 = null;
+let open = null;
+try {
+  sqlite3 = require('sqlite3');
+  open = require('sqlite').open;
+} catch (err) {
+  console.warn(
+    '[db-sqlite] native sqlite3 unavailable — SQLite fallback disabled:',
+    err && err.message ? err.message : err
+  );
+}
+
+const DB_PATH = paths.isWritable(path.join(paths.serverDir, 'data'))
+  ? paths.sqliteDbPath
+  : path.join('/tmp', 'shubh-sanjog', 'database.sqlite');
+
 let _shared = null; // module-wide handle used by the newer helpers
 
 async function init() {
+  if (!sqlite3 || !open) {
+    throw new Error('SQLite fallback unavailable (native sqlite3 module not loaded)');
+  }
+
   const dir = path.dirname(DB_PATH);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  // turbopackIgnore: runtime filesystem probe; see server/app.js for details.
+  if (!fs.existsSync(/* turbopackIgnore: true */ dir)) {
+    fs.mkdirSync(/* turbopackIgnore: true */ dir, { recursive: true });
+  }
 
   const db = await open({ filename: DB_PATH, driver: sqlite3.Database });
   _shared = db;

@@ -11,7 +11,7 @@ try {
   supabaseVerifier = null;
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-please-change';
+const { getJwtSecret } = require('../secrets');
 
 // Roles recognized across the platform (scope PDF §29 RBAC)
 const KNOWN_ROLES = ['admin', 'relationship_manager', 'staff', 'customer'];
@@ -36,7 +36,7 @@ function resolveUserRole(user, decoded = {}) {
 }
 
 function signToken(payload) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
+  return jwt.sign(payload, getJwtSecret(), { expiresIn: '7d' });
 }
 
 async function resolveUserById(userId) {
@@ -66,8 +66,18 @@ function verifyTokenMiddleware(req, res, next) {
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) return res.status(401).json({ error: 'Missing token' });
 
+  // Resolve per request: in production a missing JWT_SECRET must surface as a
+  // clear 500 rather than silently verifying against the dev default.
+  let secret;
+  try {
+    secret = getJwtSecret();
+  } catch (err) {
+    console.error('[auth]', err.message);
+    return res.status(500).json({ error: 'Server authentication is not configured' });
+  }
+
   // 1) Try legacy JWT (HS256 with JWT_SECRET)
-  jwt.verify(token, JWT_SECRET, async (err, decoded) => {
+  jwt.verify(token, secret, async (err, decoded) => {
     if (!err && decoded && decoded.userId) {
       const user = await resolveUserById(decoded.userId);
       if (!user) return res.status(401).json({ error: 'User not found' });

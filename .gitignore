@@ -1,17 +1,23 @@
 node_modules
 .next
+.next.*
 out
 npm-debug.log*
 .DS_Store
 
-# Environment / secrets
+# Environment / secrets — nothing holding a key may ever be committed.
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 server/.env
+.env.vercel*
+server/.env.vercel*
 
 # Runtime data
 server/data/*.sqlite
 server/data/*.sqlite-*
+server/uploads/*
+!server/uploads/.gitkeep
 tsconfig.tsbuildinfo
 .vercel
+.workbuddy-ai/

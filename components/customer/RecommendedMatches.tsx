@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { API } from '@/lib/api-base';
 import { CameraOff, CheckCircle2, Clock3, Heart, Search, ShieldCheck, XCircle } from 'lucide-react';
 import { compatibilityBadgeClass } from '@/lib/compatibility';
 
@@ -85,7 +86,6 @@ export default function RecommendedMatches({ initial }: { initial?: MatchProfile
   const [notice, setNotice] = useState('');
   const [hasToken, setHasToken] = useState(false);
 
-  const API = (process.env.NEXT_PUBLIC_API_URL as string) || 'http://localhost:4000/api';
 
   useEffect(() => {
     setHasToken(Boolean(localStorage.getItem('token')));
@@ -419,7 +419,6 @@ function ProfilePhoto({ name, visible }: { name: string; visible: boolean }) {
 // Renders the customer's uploaded photograph through the authenticated document
 // endpoint (JWT + privacy rules). Falls back to initials when no photo exists.
 function MatchPhoto({ profileId, name, photoDocId, visible }: { profileId: string; name: string; photoDocId: string | null; visible: boolean }) {
-  const API = (process.env.NEXT_PUBLIC_API_URL as string) || 'http://localhost:4000/api';
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
 
   useEffect(() => {

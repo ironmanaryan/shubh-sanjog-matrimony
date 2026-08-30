@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import { Amaranth, Inter } from 'next/font/google';
 import './globals.css';
 import PublicLayout from '@/components/layout/public-layout';
+import SessionBridge from '@/components/SessionBridge';
+import { AuthProvider } from '@/components/auth/AuthProvider';
 
 const amaranth = Amaranth({
   weight: ['400', '700'],
@@ -32,7 +34,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${amaranth.variable} ${inter.variable}`}>
       <body>
-        <PublicLayout>{children}</PublicLayout>
+        {/* Keeps the Express API session in sync with the Supabase session. */}
+        <SessionBridge />
+        {/* Shared "who is signed in" state for the header and every page. */}
+        <AuthProvider>
+          <PublicLayout>{children}</PublicLayout>
+        </AuthProvider>
       </body>
     </html>
   );

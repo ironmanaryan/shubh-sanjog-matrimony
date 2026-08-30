@@ -1,12 +1,12 @@
 'use client';
 
 import Link from 'next/link';
+import { API } from '@/lib/api-base';
 import { useState } from 'react';
 import { CheckCircle2, Clock3, MapPin, MessageSquareText, Phone, Send, ShieldCheck } from 'lucide-react';
 import GlassCard from '@/components/ui/glass-card';
 import WhatsAppIcon from '@/components/ui/whatsapp-icon';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
 const WHATSAPP_URL = 'https://wa.me/919034850873';
 

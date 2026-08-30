@@ -8,7 +8,11 @@
 //
 //   import { requestJson } from '@/lib/api-client';
 
-export const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+// Re-exported so existing `import { API } from '@/lib/api-client'` keep working.
+// The resolution logic lives in lib/api-base.ts (no 'use client' there, so it is
+// safe to import from server code too).
+export { API } from './api-base';
+import { API } from './api-base';
 
 // fetch() throws TypeError on network failure ("TypeError: Failed to fetch").
 export function isNetworkError(err: unknown): boolean {

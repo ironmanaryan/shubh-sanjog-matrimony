@@ -8,23 +8,41 @@
 // unconfigured so local dev / SQLite preview never breaks.
 
 import { getSupabase, sendEmailOtp, verifyEmailOtp } from './supabase';
+import { API } from './api-base';
+import { clearApiSession, exchangeSupabaseSession } from './session-bridge';
 
-export const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
+export { API };
 
 const TOKEN_KEY = 'token';
 const USER_KEY = 'shubhSanjogUser';
+
+/**
+ * Where Supabase sends the user when they click the link in an OTP email.
+ *
+ * Deliberately NOT /auth/callback: that is a serverless route handler for the
+ * PKCE `?code=` exchange Google uses, and a URL fragment never reaches the
+ * server. Magic-link sessions arrive as `#access_token=…`, so they need
+ * /auth/complete — a client page that can read the fragment.
+ */
+const EMAIL_REDIRECT_PATH = '/auth/complete';
 
 const AUTH_TIMEOUT_MS = 8000;
 const UNREACHABLE_ERROR =
   'Cannot reach the authentication service. Please check your connection and try again.';
 
-/** Mirrors server/middleware/rbac.js DEFAULT_ADMIN_IDENTIFIERS (+contains rule). */
+/**
+ * Identifiers granted admin on the client for UI gating only.
+ *
+ * EXACT MATCH ONLY. A previous version also matched any identifier *containing*
+ * "admin", which meant `admin-attacker@evil.com` or `notadmin@x.com` were
+ * treated as administrators. Real authorization is always enforced server-side
+ * by server/middleware/rbac.js — this list only decides which UI to show.
+ */
 const DEFAULT_ADMIN_IDENTIFIERS = ['admin@shubhsanjog.com', 'aryansadanshiv8@gmail.com'];
 
 function resolvePreviewRole(identifier: string): string {
   const value = identifier.trim().toLowerCase();
-  if (value.includes('admin') || DEFAULT_ADMIN_IDENTIFIERS.includes(value)) return 'admin';
-  return 'customer';
+  return DEFAULT_ADMIN_IDENTIFIERS.includes(value) ? 'admin' : 'customer';
 }
 
 export type SessionUser = {
@@ -107,6 +125,31 @@ export function clearSession() {
   localStorage.removeItem(USER_KEY);
 }
 
+/**
+ * Sign out of *both* auth systems.
+ *
+ * Clearing localStorage alone is what left people "still logged in": the
+ * Supabase cookie session survived, so the middleware kept serving /customer
+ * and the next page load silently re-minted an API token. The Supabase sign-out
+ * has to happen first so the cookie is actually revoked.
+ */
+export async function signOut(): Promise<void> {
+  try {
+    const supabase = getSupabase();
+    if (supabase) await supabase.auth.signOut();
+  } catch {
+    /* network hiccup — local cleanup below still runs */
+  }
+  clearSession();
+  clearApiSession();
+  try {
+    localStorage.removeItem('shubhSanjogProfile');
+    localStorage.removeItem('shubhSanjogProfileCompleted');
+  } catch {
+    /* storage unavailable — non-fatal */
+  }
+}
+
 // Loose shape check used to validate the OPTIONAL email field — never used to
 // require one. Phone-only sign-in/registration is fully supported.
 export function looksLikeEmail(value: string): boolean {
@@ -128,7 +171,7 @@ export async function sendOtp(identifier: string): Promise<OtpSendResult> {
       const { data, error } = await supabase.auth.signInWithOtp({
         email: trimmed.toLowerCase(),
         options: {
-          emailRedirectTo: `${window.location.origin}/auth/callback`,
+          emailRedirectTo: `${window.location.origin}${EMAIL_REDIRECT_PATH}`,
         },
       });
       console.error('[supabase] signInWithOtp raw error object:', error);
@@ -199,7 +242,19 @@ export async function verifyOtp(
           role: (data.user.app_metadata?.role as string) || (data.user.user_metadata?.role as string) || role,
           fullName: (data.user.user_metadata?.full_name as string) || details.fullName,
         };
+
+        // Store the Supabase token first so the session is usable even if the
+        // exchange below fails (the API accepts Supabase tokens as a fallback).
         persistSession(data.session.access_token, user);
+
+        // Trade it for the platform JWT, which is what every other endpoint
+        // expects. `localStorage.token` is overwritten with the JWT on success.
+        try {
+          await exchangeSupabaseSession(true);
+        } catch (e) {
+          console.warn('[auth] session exchange failed; falling back to Supabase token', e);
+        }
+
         return { ok: true, role: user.role };
       }
       return { ok: false, error: 'Invalid or expired OTP. Please request a new code.' };

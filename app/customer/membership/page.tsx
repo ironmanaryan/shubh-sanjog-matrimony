@@ -1,11 +1,11 @@
 'use client';
 
 import Link from 'next/link';
+import { API } from '@/lib/api-base';
 import { useEffect, useMemo, useState } from 'react';
 import { BadgeCheck, CheckCircle2, ChevronRight, Copy, CreditCard, FileUp, Info, ShieldCheck, Smartphone, Wallet, XCircle } from 'lucide-react';
 import { PaymentQrCode } from '../../../components/UpiPaymentModal';
 
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000/api';
 
 type Plan = {
   tier: string;

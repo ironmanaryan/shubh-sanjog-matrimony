@@ -59,9 +59,13 @@ const PERMISSIONS = {
 
 // --- Admin identity resolution ----------------------------------------------
 // Staff can always reach the panel without a pre-seeded DB role: identifiers on
-// this list (env-configurable) are treated as admins, as is anything containing
-// "admin" (e.g. admin@shubhsanjog.com). aryansadanshiv8@gmail.com is the
-// designated owner account (PRD §4) and always resolves to the ADMIN role.
+// this list (env-configurable) are treated as admins. aryansadanshiv8@gmail.com
+// is the designated owner account (PRD §4) and always resolves to ADMIN.
+//
+// Matching is EXACT. A previous version also matched any identifier containing
+// the substring "admin", which was a privilege-escalation hole: registering
+// `admin-attacker@evil.com` — or even `notadmin@example.com` — granted full
+// administrator rights.
 function normalizeIdentifierValue(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -79,7 +83,7 @@ const ADMIN_IDENTIFIERS = [
 function matchesAdminIdentifier(identifier) {
   const value = normalizeIdentifierValue(identifier);
   if (!value) return false;
-  return ADMIN_IDENTIFIERS.includes(value) || value.includes('admin');
+  return ADMIN_IDENTIFIERS.includes(value);
 }
 
 function permissionsFor(role) {
