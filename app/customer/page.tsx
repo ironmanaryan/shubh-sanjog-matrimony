@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { useEffect, useMemo, useState } from 'react';
-import { Bell, BriefcaseBusiness, CheckCheck, ChevronRight, Circle, CircleCheckBig, CreditCard, FileText, Heart, Home, MessageSquare, ShieldCheck, Sparkles, UserRound, Wallet } from 'lucide-react';
+import { Bell, BriefcaseBusiness, CheckCheck, ChevronRight, Circle, CircleCheckBig, CreditCard, FileText, GraduationCap, Heart, Home, MessageSquare, ShieldCheck, Sparkles, User, UserRound, Users, Wallet } from 'lucide-react';
 import PrivacySettings from '../../components/customer/PrivacySettings';
 import RequestMeetingButton from '@/components/customer/RequestMeetingButton';
 import { compatibilityBadgeClass } from '@/lib/compatibility';
@@ -628,90 +628,170 @@ export default function CustomerDashboardPage() {
         {/* PRD §3 step-by-step onboarding tracker */}
         {onboarding && <OnboardingChecklist status={onboarding} />}
 
-        {/* Supabase Profile Display — clean rendering of authenticated user details */}
+        {/* Structured Matrimonial Profile Display — all categories with edit options */}
         {supabaseProfile && (
-          <section className="mb-6 rounded-[28px] border border-[#f2d9a8] bg-white p-5 shadow-soft sm:p-6">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-xl font-black text-[#2c0d16]">Your Matrimony Profile</h2>
+          <section className="mb-6 overflow-hidden rounded-[28px] border border-[#f2d9a8] bg-white shadow-soft">
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-gradient-to-r from-[#7b102d] to-[#a91336] px-5 py-4 sm:px-6">
+              <h2 className="flex items-center gap-2 text-lg font-black text-white"><Sparkles size={18} className="text-[#f2d9a8]" /> Your Matrimony Profile</h2>
               <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide ${membership.active === false ? 'bg-[#ffe5e5] text-[#9b1f2f]' : 'bg-[#eaf8ef] text-[#0a7d4c]'}`}>
-                {membership.active === false ? 'Inactive' : membership.tier || 'Free'} • {profile.status || (supabaseProfile['status'] as string) || 'Draft'}
+                {membership.active === false ? 'Inactive' : membership.tier || 'Free'} • {profile.status || (supabaseProfile['status'] as string) || 'Active'}
               </span>
             </div>
-            <div className="grid gap-6 lg:grid-cols-[180px_1fr]">
-              {/* Profile Picture */}
-              <div className="flex flex-col items-center gap-3">
-                {(() => {
-                  const photoUrl = (supabaseProfile['photo_url'] as string) || (supabaseProfile['avatar_url'] as string) || (supabaseProfile['cloudinary_url'] as string);
-                  return photoUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={photoUrl} alt={String(supabaseProfile['full_name'] || fullName)} className="h-36 w-36 rounded-3xl object-cover shadow-md ring-2 ring-[#f2d9a8]" />
-                  ) : (
-                    <div className="flex h-36 w-36 items-center justify-center rounded-3xl bg-gradient-to-br from-[#7b102d] to-[#d4a64a] text-4xl font-black text-white shadow-md">
-                      {(String(supabaseProfile['full_name'] || fullName).trim().charAt(0) || 'C').toUpperCase()}
-                    </div>
-                  );
-                })()}
-                <div className="text-center">
-                  <div className="text-lg font-black text-[#2c0d16]">{String(supabaseProfile['full_name'] || fullName)}</div>
-                  <div className="text-xs text-[#6a4a57]">{supabaseUser?.email || profile.personal?.email || ''}</div>
-                  {supabaseProfile['age'] ? <div className="mt-1 text-sm font-semibold text-[#7b102d]">{String(supabaseProfile['age'])} years • {String(supabaseProfile['gender'] || '')}</div> : null}
-                </div>
-              </div>
 
-              {/* Personal Info & Matrimonial Specs */}
-              <div className="space-y-4">
-                <div className="rounded-2xl bg-[#fffaf3] p-4">
-                  <h3 className="mb-3 text-sm font-bold uppercase tracking-[0.16em] text-[#7b102d]">Personal Info</h3>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {[
-                      { label: 'Full Name', value: supabaseProfile['full_name'] || fullName },
-                      { label: 'Age', value: supabaseProfile['age'] ? `${supabaseProfile['age']} years` : profile.personal?.dob ? `${calculateAge(profile.personal.dob)} years` : '—' },
-                      { label: 'Gender', value: supabaseProfile['gender'] || profile.personal?.gender || '—' },
-                      { label: 'Email', value: supabaseUser?.email || profile.personal?.email || '—' },
-                      { label: 'City', value: supabaseProfile['city'] || profile.personal?.city || '—' },
-                      { label: 'State', value: supabaseProfile['state'] || profile.personal?.state || '—' },
-                    ].map((item) => (
-                      <div key={item.label} className="rounded-xl bg-white px-3 py-2.5 shadow-sm">
-                        <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8a6a75]">{item.label}</div>
-                        <div className="mt-0.5 truncate text-sm font-bold text-[#2c0d16]" title={String(item.value)}>{String(item.value)}</div>
+            <div className="p-5 sm:p-6">
+              <div className="grid gap-6 lg:grid-cols-[200px_1fr]">
+                {/* Profile Picture */}
+                <div className="flex flex-col items-center gap-3 rounded-2xl bg-[#fffaf3] p-5">
+                  {(() => {
+                    const photoUrl = (supabaseProfile['photo_url'] as string) || (supabaseProfile['avatar_url'] as string) || (supabaseProfile['profile_photo'] as string) || (supabaseProfile['cloudinary_url'] as string) || (supabaseProfile['personal'] as Record<string, unknown>)?.['photoUrl'] as string;
+                    return photoUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={photoUrl} alt={String(supabaseProfile['full_name'] || fullName)} className="h-40 w-40 rounded-3xl object-cover shadow-md ring-2 ring-[#f2d9a8]" />
+                    ) : (
+                      <div className="flex h-40 w-40 items-center justify-center rounded-3xl bg-gradient-to-br from-[#7b102d] to-[#d4a64a] text-5xl font-black text-white shadow-md">
+                        {(String(supabaseProfile['full_name'] || fullName).trim().charAt(0) || 'C').toUpperCase()}
                       </div>
-                    ))}
+                    );
+                  })()}
+                  <div className="text-center">
+                    <div className="text-lg font-black text-[#2c0d16]">{String(supabaseProfile['full_name'] || supabaseProfile['fullName'] || fullName)}</div>
+                    <div className="text-xs text-[#6a4a57]">{supabaseUser?.email || (supabaseProfile['email'] as string) || profile.personal?.email || ''}</div>
+                    <div className="mt-1 text-sm font-semibold text-[#7b102d]">
+                      {[supabaseProfile['age'] ? `${supabaseProfile['age']} yrs` : profile.personal?.dob ? `${calculateAge(profile.personal.dob)} yrs` : null, supabaseProfile['gender'] || profile.personal?.gender].filter(Boolean).join(' • ') || '—'}
+                    </div>
+                    <Link href="/register/fill-details?step=1" className="mt-3 inline-flex rounded-full bg-[#7b102d] px-4 py-1.5 text-xs font-bold text-white hover:bg-[#5a0a1f]">Edit Photo</Link>
                   </div>
                 </div>
 
-                <div className="rounded-2xl bg-[#fffaf3] p-4">
-                  <h3 className="mb-3 text-sm font-bold uppercase tracking-[0.16em] text-[#7b102d]">Matrimonial Specs</h3>
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                    {[
-                      { label: 'Religion', value: supabaseProfile['religion'] || profile.personal?.religion || '—' },
-                      { label: 'Caste', value: supabaseProfile['caste'] || profile.personal?.caste || '—' },
-                      { label: 'Profession', value: supabaseProfile['profession'] || profile.education?.profession || '—' },
-                      { label: 'Education', value: supabaseProfile['education'] || profile.education?.highestQualification || '—' },
-                      { label: 'Location', value: supabaseProfile['location'] || ([profile.personal?.city, profile.personal?.state].filter(Boolean).join(', ') || '—') },
-                      { label: 'Bio', value: (supabaseProfile['bio'] as string) || (profile.personal as { about?: string })?.about || '—' },
-                    ].map((item) => (
-                      <div key={item.label} className="rounded-xl bg-white px-3 py-2.5 shadow-sm">
-                        <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8a6a75]">{item.label}</div>
-                        <div className="mt-0.5 text-sm font-bold text-[#2c0d16] line-clamp-2" title={String(item.value)}>{String(item.value)}</div>
-                      </div>
-                    ))}
+                <div className="space-y-5">
+                  {/* Personal Information */}
+                  <div className="rounded-2xl border border-[#f2d9a8] bg-[#fffaf3] p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="flex items-center gap-2 text-sm font-black uppercase tracking-[0.16em] text-[#7b102d]"><User size={14} /> Personal Information</h3>
+                      <Link href="/register/fill-details?step=1" className="text-xs font-bold text-[#7b102d] underline">Edit</Link>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      {[
+                        { label: 'Full Name', value: supabaseProfile['full_name'] || supabaseProfile['fullName'] || fullName },
+                        { label: 'Gender', value: supabaseProfile['gender'] || profile.personal?.gender || '—' },
+                        { label: 'Date of Birth', value: supabaseProfile['dob'] || supabaseProfile['date_of_birth'] || profile.personal?.dob || '—' },
+                        { label: 'Age', value: supabaseProfile['age'] ? `${supabaseProfile['age']} years` : profile.personal?.dob ? `${calculateAge(profile.personal.dob)} years` : '—' },
+                        { label: 'Height', value: supabaseProfile['height'] || (supabaseProfile['personal'] as Record<string,unknown>)?.['height'] || '—' },
+                        { label: 'Weight', value: supabaseProfile['weight'] || (supabaseProfile['personal'] as Record<string,unknown>)?.['weight'] || '—' },
+                        { label: 'Religion', value: supabaseProfile['religion'] || profile.personal?.religion || '—' },
+                        { label: 'Caste', value: supabaseProfile['caste'] || profile.personal?.caste || '—' },
+                        { label: 'Sub-Caste', value: supabaseProfile['sub_caste'] || supabaseProfile['subCaste'] || profile.personal?.subCaste || '—' },
+                        { label: 'Mother Tongue', value: supabaseProfile['mother_tongue'] || supabaseProfile['motherTongue'] || profile.personal?.motherTongue || '—' },
+                        { label: 'Marital Status', value: supabaseProfile['marital_status'] || supabaseProfile['maritalStatus'] || profile.personal?.maritalStatus || '—' },
+                        { label: 'Location', value: supabaseProfile['location'] || supabaseProfile['city'] || profile.personal?.city || '—' },
+                        { label: 'Country', value: supabaseProfile['country'] || '—' },
+                        { label: 'Citizenship', value: supabaseProfile['citizenship'] || '—' },
+                        { label: 'NRI Status', value: supabaseProfile['nri_status'] === true || supabaseProfile['nri_status'] === 'Yes' ? 'Yes' : supabaseProfile['nri_status'] === false || supabaseProfile['nri_status'] === 'No' ? 'No' : (supabaseProfile['nriStatus'] ? 'Yes' : 'No') },
+                        { label: 'Manglik Status', value: supabaseProfile['manglik_status'] || supabaseProfile['manglikStatus'] || '—' },
+                        { label: 'Horoscope', value: supabaseProfile['horoscope_details'] || supabaseProfile['horoscopeDetails'] || '—' },
+                        { label: 'Phone', value: supabaseProfile['phone'] || supabaseProfile['phone_number'] || profile.personal?.mobile || '—' },
+                      ].map((item) => (
+                        <div key={item.label} className="rounded-xl bg-white px-3 py-2.5 shadow-sm">
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8a6a75]">{item.label}</div>
+                          <div className="mt-0.5 truncate text-sm font-bold text-[#2c0d16]" title={String(item.value)}>{String(item.value)}</div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                </div>
 
-                <div className="rounded-2xl bg-[#fffaf3] p-4">
-                  <h3 className="mb-3 text-sm font-bold uppercase tracking-[0.16em] text-[#7b102d]">Membership Status</h3>
-                  <div className="grid gap-3 sm:grid-cols-3">
-                    <div className="rounded-xl bg-white px-3 py-2.5 shadow-sm">
-                      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8a6a75]">Plan</div>
-                      <div className="mt-0.5 text-sm font-bold text-[#2c0d16]">{membership.tier || 'Free'}</div>
+                  {/* Education & Career */}
+                  <div className="rounded-2xl border border-[#f2d9a8] bg-[#fffaf3] p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="flex items-center gap-2 text-sm font-black uppercase tracking-[0.16em] text-[#7b102d]"><GraduationCap size={14} /> Education & Career</h3>
+                      <Link href="/register/fill-details?step=2" className="text-xs font-bold text-[#7b102d] underline">Edit</Link>
                     </div>
-                    <div className="rounded-xl bg-white px-3 py-2.5 shadow-sm">
-                      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8a6a75]">Status</div>
-                      <div className={`mt-0.5 text-sm font-bold ${membership.active === false ? 'text-[#9b1f2f]' : 'text-[#0a7d4c]'}`}>{membership.active === false ? 'Inactive' : 'Active'}</div>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      {[
+                        { label: 'Highest Qualification', value: supabaseProfile['highest_qualification'] || supabaseProfile['qualification'] || supabaseProfile['highestQualification'] || profile.education?.highestQualification || '—' },
+                        { label: 'Education Details', value: supabaseProfile['education_details'] || supabaseProfile['educationDetails'] || '—' },
+                        { label: 'Profession', value: supabaseProfile['profession'] || profile.education?.profession || '—' },
+                        { label: 'Job / Business', value: supabaseProfile['job_business'] || supabaseProfile['jobBusiness'] || '—' },
+                        { label: 'Company', value: supabaseProfile['company'] || supabaseProfile['organization'] || profile.education?.company || '—' },
+                        { label: 'Annual Income', value: supabaseProfile['annual_income'] || supabaseProfile['annualIncome'] || profile.education?.annualIncome || '—' },
+                        { label: 'Work Location', value: supabaseProfile['work_location'] || supabaseProfile['workLocation'] || profile.education?.workLocation || '—' },
+                        { label: 'Experience', value: supabaseProfile['experience'] || supabaseProfile['years_of_experience'] || '—' },
+                      ].map((item) => (
+                        <div key={item.label} className="rounded-xl bg-white px-3 py-2.5 shadow-sm">
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8a6a75]">{item.label}</div>
+                          <div className="mt-0.5 truncate text-sm font-bold text-[#2c0d16]" title={String(item.value)}>{String(item.value)}</div>
+                        </div>
+                      ))}
                     </div>
-                    <div className="rounded-xl bg-white px-3 py-2.5 shadow-sm">
-                      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8a6a75]">Expiry</div>
-                      <div className="mt-0.5 text-sm font-bold text-[#2c0d16]">{formatExpiry(membership.expiresAt)}</div>
+                  </div>
+
+                  {/* Lifestyle & About Me */}
+                  <div className="rounded-2xl border border-[#f2d9a8] bg-[#fffaf3] p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="flex items-center gap-2 text-sm font-black uppercase tracking-[0.16em] text-[#7b102d]"><Heart size={14} /> Lifestyle & About Me</h3>
+                      <Link href="/register/fill-details?step=3" className="text-xs font-bold text-[#7b102d] underline">Edit</Link>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      {[
+                        { label: 'Food Preference', value: supabaseProfile['food_preference'] || supabaseProfile['foodPreference'] || '—' },
+                        { label: 'Smoking', value: supabaseProfile['smoking'] || '—' },
+                        { label: 'Drinking', value: supabaseProfile['drinking'] || '—' },
+                        { label: 'Hobbies', value: supabaseProfile['hobbies'] || '—' },
+                        { label: 'Interests', value: supabaseProfile['interests'] || '—' },
+                      ].map((item) => (
+                        <div key={item.label} className="rounded-xl bg-white px-3 py-2.5 shadow-sm">
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8a6a75]">{item.label}</div>
+                          <div className="mt-0.5 truncate text-sm font-bold text-[#2c0d16]" title={String(item.value)}>{String(item.value)}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-3 rounded-xl bg-white p-3 shadow-sm">
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8a6a75]">About Me</div>
+                      <div className="mt-1 text-sm leading-6 text-[#2c0d16]">{String(supabaseProfile['about'] || supabaseProfile['about_me'] || supabaseProfile['bio'] || supabaseProfile['personality'] || '—')}</div>
+                    </div>
+                  </div>
+
+                  {/* Family Information */}
+                  <div className="rounded-2xl border border-[#f2d9a8] bg-[#fffaf3] p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="flex items-center gap-2 text-sm font-black uppercase tracking-[0.16em] text-[#7b102d]"><Users size={14} /> Family Information</h3>
+                      <Link href="/register/fill-details?step=4" className="text-xs font-bold text-[#7b102d] underline">Edit</Link>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      {[
+                        { label: "Father's Name", value: supabaseProfile['father_name'] || supabaseProfile['fatherName'] || profile.family?.fatherName || '—' },
+                        { label: "Father's Occupation", value: supabaseProfile['father_occupation'] || supabaseProfile['fatherOccupation'] || profile.family?.fatherOccupation || '—' },
+                        { label: "Mother's Name", value: supabaseProfile['mother_name'] || supabaseProfile['motherName'] || profile.family?.motherName || '—' },
+                        { label: "Mother's Occupation", value: supabaseProfile['mother_occupation'] || supabaseProfile['motherOccupation'] || profile.family?.motherOccupation || '—' },
+                        { label: 'Brothers', value: supabaseProfile['brothers'] ?? supabaseProfile['number_of_brothers'] ?? profile.family?.numberOfBrothers ?? '—' },
+                        { label: 'Sisters', value: supabaseProfile['sisters'] ?? supabaseProfile['number_of_sisters'] ?? profile.family?.numberOfSisters ?? '—' },
+                        { label: 'Family Type', value: supabaseProfile['family_type'] || supabaseProfile['familyType'] || profile.family?.familyType || '—' },
+                        { label: 'Family Status', value: supabaseProfile['family_status'] || supabaseProfile['familyStatus'] || profile.family?.familyStatus || '—' },
+                        { label: 'Family Location', value: supabaseProfile['family_location'] || supabaseProfile['familyLocation'] || profile.family?.familyLocation || '—' },
+                      ].map((item) => (
+                        <div key={item.label} className="rounded-xl bg-white px-3 py-2.5 shadow-sm">
+                          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8a6a75]">{item.label}</div>
+                          <div className="mt-0.5 truncate text-sm font-bold text-[#2c0d16]" title={String(item.value)}>{String(item.value)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Membership Status */}
+                  <div className="rounded-2xl bg-gradient-to-r from-[#fff7ee] to-[#fffaf3] p-4 ring-1 ring-[#f2d9a8]">
+                    <h3 className="mb-3 text-sm font-black uppercase tracking-[0.16em] text-[#7b102d]">Membership Status</h3>
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <div className="rounded-xl bg-white px-3 py-2.5 shadow-sm">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8a6a75]">Plan</div>
+                        <div className="mt-0.5 text-sm font-bold text-[#2c0d16]">{membership.tier || 'Free'}</div>
+                      </div>
+                      <div className="rounded-xl bg-white px-3 py-2.5 shadow-sm">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8a6a75]">Status</div>
+                        <div className={`mt-0.5 text-sm font-bold ${membership.active === false ? 'text-[#9b1f2f]' : 'text-[#0a7d4c]'}`}>{membership.active === false ? 'Inactive' : 'Active'}</div>
+                      </div>
+                      <div className="rounded-xl bg-white px-3 py-2.5 shadow-sm">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8a6a75]">Expiry</div>
+                        <div className="mt-0.5 text-sm font-bold text-[#2c0d16]">{formatExpiry(membership.expiresAt)}</div>
+                      </div>
                     </div>
                   </div>
                 </div>
