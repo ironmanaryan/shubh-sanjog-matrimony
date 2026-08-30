@@ -9,6 +9,7 @@ import RequestMeetingButton from '@/components/customer/RequestMeetingButton';
 import { compatibilityBadgeClass } from '@/lib/compatibility';
 import { buildMeetingRequestMessage } from '@/lib/whatsapp';
 import { API, requestJson } from '@/lib/api-client';
+import { getSupabase } from '@/lib/supabase';
 
 // Customer panel sections from the reference scope document
 const navItems = [
@@ -344,6 +345,8 @@ export default function CustomerDashboardPage() {
   const [bookingBusy, setBookingBusy] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [supabaseProfile, setSupabaseProfile] = useState<Record<string, unknown> | null>(null);
+  const [supabaseUser, setSupabaseUser] = useState<{ id: string; email?: string } | null>(null);
 
   const authHeaders = () => {
     const token = localStorage.getItem('token');
@@ -401,6 +404,80 @@ export default function CustomerDashboardPage() {
 
   useEffect(() => {
     loadData();
+    // Fetch Supabase-authenticated user & profile (for OAuth + new `profiles` table)
+    (async () => {
+      try {
+        const supabase = getSupabase();
+        if (!supabase) return;
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        if (!user) return;
+        setSupabaseUser({ id: user.id, email: user.email || undefined });
+
+        // Try `profiles` table first
+        let fetched: Record<string, unknown> | null = null;
+        try {
+          const { data } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
+          if (data) fetched = data as Record<string, unknown>;
+        } catch {}
+        if (!fetched) {
+          try {
+            const { data } = await supabase.from('profiles').select('*').eq('user_id', user.id).maybeSingle();
+            if (data) fetched = data as Record<string, unknown>;
+          } catch {}
+        }
+        if (!fetched) {
+          try {
+            const { data } = await supabase.from('matrimonial_profiles').select('*').eq('user_id', user.id).maybeSingle();
+            if (data) {
+              // Normalize matrimonial_profiles shape into flat profile for display
+              const mp = data as { personal?: Record<string, unknown>; education?: Record<string, unknown>; family?: Record<string, unknown>; status?: string };
+              fetched = {
+                full_name: `${(mp.personal as { firstName?: string })?.firstName || ''} ${(mp.personal as { lastName?: string })?.lastName || ''}`.trim(),
+                age: (mp.personal as { age?: unknown })?.age,
+                gender: (mp.personal as { gender?: unknown })?.gender,
+                religion: (mp.personal as { religion?: unknown })?.religion,
+                city: (mp.personal as { city?: unknown })?.city,
+                profession: (mp.education as { profession?: unknown })?.profession,
+                education: (mp.education as { highestQualification?: unknown })?.highestQualification,
+                bio: (mp.personal as { about?: unknown })?.about || (mp.personal as { bio?: unknown })?.bio,
+                status: mp.status,
+                raw: data,
+              };
+            }
+          } catch {}
+        }
+        if (fetched) {
+          setSupabaseProfile(fetched);
+          // Merge into existing profile state for compatibility with current dashboard UI
+          try {
+            const personalPatch: Record<string, unknown> = {};
+            const eduPatch: Record<string, unknown> = {};
+            if (fetched['full_name']) {
+              const parts = String(fetched['full_name']).trim().split(' ');
+              personalPatch['firstName'] = parts[0] || '';
+              personalPatch['lastName'] = parts.slice(1).join(' ') || '';
+            }
+            if (fetched['gender']) personalPatch['gender'] = fetched['gender'];
+            if (fetched['religion']) personalPatch['religion'] = fetched['religion'];
+            if (fetched['caste']) personalPatch['caste'] = fetched['caste'];
+            if (fetched['city']) personalPatch['city'] = fetched['city'];
+            if (fetched['age']) personalPatch['age'] = fetched['age'];
+            if (fetched['bio']) (personalPatch['about'] as unknown) = fetched['bio'];
+            if (fetched['profession']) eduPatch['profession'] = fetched['profession'];
+            if (fetched['education']) eduPatch['highestQualification'] = fetched['education'];
+            if (Object.keys(personalPatch).length || Object.keys(eduPatch).length) {
+              setProfile((prev) => ({
+                ...prev,
+                personal: { ...prev.personal, ...(personalPatch as PersonalInfo) },
+                education: { ...prev.education, ...(eduPatch as ProfileData['education']) },
+              }));
+            }
+          } catch {}
+        }
+      } catch {}
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -550,6 +627,98 @@ export default function CustomerDashboardPage() {
 
         {/* PRD §3 step-by-step onboarding tracker */}
         {onboarding && <OnboardingChecklist status={onboarding} />}
+
+        {/* Supabase Profile Display — clean rendering of authenticated user details */}
+        {supabaseProfile && (
+          <section className="mb-6 rounded-[28px] border border-[#f2d9a8] bg-white p-5 shadow-soft sm:p-6">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-xl font-black text-[#2c0d16]">Your Matrimony Profile</h2>
+              <span className={`inline-flex rounded-full px-3 py-1 text-xs font-bold uppercase tracking-wide ${membership.active === false ? 'bg-[#ffe5e5] text-[#9b1f2f]' : 'bg-[#eaf8ef] text-[#0a7d4c]'}`}>
+                {membership.active === false ? 'Inactive' : membership.tier || 'Free'} • {profile.status || (supabaseProfile['status'] as string) || 'Draft'}
+              </span>
+            </div>
+            <div className="grid gap-6 lg:grid-cols-[180px_1fr]">
+              {/* Profile Picture */}
+              <div className="flex flex-col items-center gap-3">
+                {(() => {
+                  const photoUrl = (supabaseProfile['photo_url'] as string) || (supabaseProfile['avatar_url'] as string) || (supabaseProfile['cloudinary_url'] as string);
+                  return photoUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={photoUrl} alt={String(supabaseProfile['full_name'] || fullName)} className="h-36 w-36 rounded-3xl object-cover shadow-md ring-2 ring-[#f2d9a8]" />
+                  ) : (
+                    <div className="flex h-36 w-36 items-center justify-center rounded-3xl bg-gradient-to-br from-[#7b102d] to-[#d4a64a] text-4xl font-black text-white shadow-md">
+                      {(String(supabaseProfile['full_name'] || fullName).trim().charAt(0) || 'C').toUpperCase()}
+                    </div>
+                  );
+                })()}
+                <div className="text-center">
+                  <div className="text-lg font-black text-[#2c0d16]">{String(supabaseProfile['full_name'] || fullName)}</div>
+                  <div className="text-xs text-[#6a4a57]">{supabaseUser?.email || profile.personal?.email || ''}</div>
+                  {supabaseProfile['age'] ? <div className="mt-1 text-sm font-semibold text-[#7b102d]">{String(supabaseProfile['age'])} years • {String(supabaseProfile['gender'] || '')}</div> : null}
+                </div>
+              </div>
+
+              {/* Personal Info & Matrimonial Specs */}
+              <div className="space-y-4">
+                <div className="rounded-2xl bg-[#fffaf3] p-4">
+                  <h3 className="mb-3 text-sm font-bold uppercase tracking-[0.16em] text-[#7b102d]">Personal Info</h3>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {[
+                      { label: 'Full Name', value: supabaseProfile['full_name'] || fullName },
+                      { label: 'Age', value: supabaseProfile['age'] ? `${supabaseProfile['age']} years` : profile.personal?.dob ? `${calculateAge(profile.personal.dob)} years` : '—' },
+                      { label: 'Gender', value: supabaseProfile['gender'] || profile.personal?.gender || '—' },
+                      { label: 'Email', value: supabaseUser?.email || profile.personal?.email || '—' },
+                      { label: 'City', value: supabaseProfile['city'] || profile.personal?.city || '—' },
+                      { label: 'State', value: supabaseProfile['state'] || profile.personal?.state || '—' },
+                    ].map((item) => (
+                      <div key={item.label} className="rounded-xl bg-white px-3 py-2.5 shadow-sm">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8a6a75]">{item.label}</div>
+                        <div className="mt-0.5 truncate text-sm font-bold text-[#2c0d16]" title={String(item.value)}>{String(item.value)}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl bg-[#fffaf3] p-4">
+                  <h3 className="mb-3 text-sm font-bold uppercase tracking-[0.16em] text-[#7b102d]">Matrimonial Specs</h3>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {[
+                      { label: 'Religion', value: supabaseProfile['religion'] || profile.personal?.religion || '—' },
+                      { label: 'Caste', value: supabaseProfile['caste'] || profile.personal?.caste || '—' },
+                      { label: 'Profession', value: supabaseProfile['profession'] || profile.education?.profession || '—' },
+                      { label: 'Education', value: supabaseProfile['education'] || profile.education?.highestQualification || '—' },
+                      { label: 'Location', value: supabaseProfile['location'] || ([profile.personal?.city, profile.personal?.state].filter(Boolean).join(', ') || '—') },
+                      { label: 'Bio', value: (supabaseProfile['bio'] as string) || (profile.personal as { about?: string })?.about || '—' },
+                    ].map((item) => (
+                      <div key={item.label} className="rounded-xl bg-white px-3 py-2.5 shadow-sm">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8a6a75]">{item.label}</div>
+                        <div className="mt-0.5 text-sm font-bold text-[#2c0d16] line-clamp-2" title={String(item.value)}>{String(item.value)}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl bg-[#fffaf3] p-4">
+                  <h3 className="mb-3 text-sm font-bold uppercase tracking-[0.16em] text-[#7b102d]">Membership Status</h3>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-xl bg-white px-3 py-2.5 shadow-sm">
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8a6a75]">Plan</div>
+                      <div className="mt-0.5 text-sm font-bold text-[#2c0d16]">{membership.tier || 'Free'}</div>
+                    </div>
+                    <div className="rounded-xl bg-white px-3 py-2.5 shadow-sm">
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8a6a75]">Status</div>
+                      <div className={`mt-0.5 text-sm font-bold ${membership.active === false ? 'text-[#9b1f2f]' : 'text-[#0a7d4c]'}`}>{membership.active === false ? 'Inactive' : 'Active'}</div>
+                    </div>
+                    <div className="rounded-xl bg-white px-3 py-2.5 shadow-sm">
+                      <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[#8a6a75]">Expiry</div>
+                      <div className="mt-0.5 text-sm font-bold text-[#2c0d16]">{formatExpiry(membership.expiresAt)}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
 
         <div className="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
           <aside className="rounded-[28px] border border-[#f2d9a8] bg-white p-4 shadow-soft">

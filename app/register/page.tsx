@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 import Image from 'next/image';
-import { useRouter } from 'next/navigation';
-import { useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useRef, useState } from 'react';
 import { ArrowRight, Mail, Phone, ShieldCheck, ChevronDown, ChevronUp } from 'lucide-react';
 import OtpInput from '@/components/auth/OtpInput';
 import Button from '@/components/ui/button';
@@ -32,8 +32,10 @@ function GoogleLogo() {
   );
 }
 
-export default function RegisterPage() {
+function RegisterPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const redirectParam = searchParams.get('redirect') || searchParams.get('next') || '';
   const [form, setForm] = useState({ fullName: '', email: '', phone: '' });
   const [errors, setErrors] = useState<FieldErrors>({});
   const [otpSent, setOtpSent] = useState(false);
@@ -70,25 +72,14 @@ export default function RegisterPage() {
   };
 
   const handleGoogleSignIn = async () => {
-    const supabase = getSupabase();
-    if (!supabase) {
-      notify('Cannot reach the authentication service. Please check your connection and try again.', 'error');
-      return;
-    }
-    setGoogleBusy(true);
-    try {
-      const { data, error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
-        },
-      });
-      if (error) console.error('Google Sign-In Error:', error.message);
-    } catch (e) {
-      console.error('Google Sign-In Error:', e instanceof Error ? e.message : String(e));
-    } finally {
-      setGoogleBusy(false);
-    }
+    const supabase = getSupabase()!;
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
+    });
+    if (error) console.error('OAuth Error:', error.message);
   };
 
   const handleSendOtp = async () => {
@@ -178,7 +169,11 @@ export default function RegisterPage() {
           } catch {}
         }
       } catch {}
-      router.push('/customer/biodata');
+      if (redirectParam) {
+        router.push(redirectParam);
+      } else {
+        router.push('/customer/biodata');
+      }
     } catch (e) {
       otpCompleteRef.current = false;
       const msg = e instanceof Error ? e.message : 'Registration failed. Please try again.';
@@ -413,5 +408,13 @@ export default function RegisterPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense fallback={<div className="min-h-[100dvh] flex items-center justify-center bg-[#f8f5f0] p-8 text-[#2c0d16]">Loading...</div>}>
+      <RegisterPageInner />
+    </Suspense>
   );
 }
