@@ -37,70 +37,68 @@ export async function GET(request: Request) {
       } = await supabase.auth.getUser();
 
       if (user) {
-        let profileExists = false;
+        let isCompleted = false;
 
-        // Check `profiles` table (as per task spec)
+        // Check `profiles` table with is_completed flag
         try {
           const { data: profile, error: profileError } = await supabase
             .from('profiles')
-            .select('id')
-            .eq('id', user.id)
+            .select('is_completed, id, user_id')
+            .or(`id.eq.${user.id},user_id.eq.${user.id}`)
             .maybeSingle();
+
           if (!profileError && profile) {
-            profileExists = true;
+            const val = (profile as Record<string, unknown>)['is_completed'];
+            isCompleted = val === true || val === 'true' || val === 1 || val === '1';
           }
         } catch {
-          // profiles table may not exist or query failed — try fallback
+          // ignore, treat as not completed
         }
 
-        // Fallback: check `profiles` with user_id column
-        if (!profileExists) {
+        // Fallback: try separate queries if `or` not supported
+        if (!isCompleted) {
           try {
-            const { data: profileByUserId, error: e2 } = await supabase
+            const { data: byId } = await supabase
               .from('profiles')
-              .select('id, user_id')
-              .eq('user_id', user.id)
+              .select('is_completed')
+              .eq('id', user.id)
               .maybeSingle();
-            if (!e2 && profileByUserId) {
-              profileExists = true;
+            if (byId) {
+              const v = (byId as Record<string, unknown>)['is_completed'];
+              if (v === true || v === 'true' || v === 1) isCompleted = true;
             }
           } catch {}
         }
-
-        // Fallback: check matrimonial_profiles (actual schema table)
-        if (!profileExists) {
+        if (!isCompleted) {
           try {
-            const { data: mp, error: mpError } = await supabase
-              .from('matrimonial_profiles')
-              .select('user_id')
+            const { data: byUserId } = await supabase
+              .from('profiles')
+              .select('is_completed')
               .eq('user_id', user.id)
               .maybeSingle();
-            if (!mpError && mp) {
-              profileExists = true;
+            if (byUserId) {
+              const v = (byUserId as Record<string, unknown>)['is_completed'];
+              if (v === true || v === 'true' || v === 1) isCompleted = true;
             }
           } catch {}
         }
 
-        // Also check users table existence as last resort for profile inference
-        // If user exists but no profile, we still treat as no profile -> onboarding
-
-        if (profileExists) {
-          // If user already has a profile, redirect to intended destination or dashboard
-          const redirectTo = next ? next : '/customer';
-          // Ensure redirect is relative to origin and safe
-          const safeRedirect = redirectTo.startsWith('/') ? redirectTo : '/customer';
-          return NextResponse.redirect(new URL(safeRedirect, requestUrl.origin));
+        if (isCompleted) {
+          const redirectTo = next && next.startsWith('/') ? next : '/customer';
+          return NextResponse.redirect(new URL(redirectTo, requestUrl.origin));
         } else {
-          // New user — needs to create profile
-          return NextResponse.redirect(new URL('/create-profile?welcome=true', requestUrl.origin));
+          return NextResponse.redirect(new URL('/register/fill-details?step=1', requestUrl.origin));
         }
       }
     }
   }
 
-  // Fallback: no code or exchange failed — redirect to home or next if provided
+  // No code or exchange failed — if next exists, honor it, otherwise check auth state again
+  if (code) {
+    return NextResponse.redirect(new URL('/register/fill-details?step=1', requestUrl.origin));
+  }
   if (next) {
-    const safeNext = next.startsWith('/') ? next : '/';
+    const safeNext = next.startsWith('/') ? next : '/customer';
     return NextResponse.redirect(new URL(safeNext, requestUrl.origin));
   }
 
