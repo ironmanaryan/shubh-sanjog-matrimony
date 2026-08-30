@@ -9,7 +9,7 @@ import Button from '@/components/ui/button';
 import GlassCard from '@/components/ui/glass-card';
 import Loader from '@/components/ui/loader';
 import TextField from '@/components/ui/text-field';
-import { verifyOtp, getSession, looksLikeEmail } from '@/lib/auth-client';
+import { verifyOtp, looksLikeEmail } from '@/lib/auth-client';
 import { getSupabase } from '@/lib/supabase';
 
 const EMPTY_OTP = ['', '', '', '', '', ''];
@@ -56,13 +56,6 @@ function LoginPageInner() {
     });
     if (error) console.error('OAuth Error:', error.message);
   };
-
-  useEffect(() => {
-    const { token, user } = getSession();
-    if (token && user) {
-      router.replace(user.role === 'admin' ? '/admin' : '/customer');
-    }
-  }, [router]);
 
   useEffect(() => {
     if (resendIn <= 0) return;
