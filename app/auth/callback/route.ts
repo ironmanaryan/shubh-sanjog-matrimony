@@ -34,11 +34,17 @@ export async function GET(request: Request) {
     const { data: { session }, error } = await supabase.auth.exchangeCodeForSession(code);
 
     if (session?.user && !error) {
-      const { data: profile } = await supabase
+      const { data: profile, error: profileError } = await supabase
         .from('profiles')
         .select('is_completed')
         .eq('id', session.user.id)
         .maybeSingle();
+
+      // If profiles table is missing (PGRST205) — treat as completed to avoid infinite loop until migration is run
+      // The fill-details Express API fallback will handle profile creation
+      if (profileError && (profileError as { code?: string }).code === 'PGRST205') {
+        return NextResponse.redirect(new URL('/customer', request.url));
+      }
 
       if (!profile || !profile.is_completed) {
         // Ensure a profile stub exists so login via Google always creates a DB record

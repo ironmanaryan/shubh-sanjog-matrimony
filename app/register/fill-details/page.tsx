@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { CheckCircle, User, Heart, GraduationCap, MapPin, Upload, ChevronRight, ChevronLeft, Sparkles, Users, Utensils, FileText } from 'lucide-react';
 import { getSupabase } from '@/lib/supabase';
+import { requestJson } from '@/lib/api-client';
 
 type FormState = {
   // Personal Information
@@ -506,6 +507,37 @@ function FillDetailsInner() {
         await supabase.from('matrimonial_profiles').upsert(mpPayload as never, { onConflict: 'user_id' } as never);
         await supabase.from('users').upsert({ id: userId, identifier: (userEmail || form.phone || userId).toLowerCase(), email: userEmail, full_name: form.fullName.trim(), role: 'customer' } as never, { onConflict: 'id' } as never);
       } catch {}
+
+      // Fallback / Sync to Express API (SQLite) so profile is visible in /customer even when Supabase tables are missing (PGRST205)
+      // This ensures OTP and OAuth users see their profile immediately in the dashboard
+      if (!saved || lastError?.includes('PGRST205') || lastError?.includes('Could not find the table')) {
+        try {
+          // Prefer Supabase session token, fallback to localStorage token (OTP flow)
+          let apiToken: string | null = null;
+          try {
+            const { data: { session } } = await supabase.auth.getSession();
+            apiToken = session?.access_token || null;
+          } catch {}
+          if (!apiToken) {
+            try { apiToken = localStorage.getItem('token'); } catch {}
+          }
+          if (apiToken) {
+            const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${apiToken}` };
+            const r1 = await requestJson('/profile/personal', { method: 'POST', headers, body: JSON.stringify(structured.personal) });
+            const r2 = await requestJson('/profile/education', { method: 'POST', headers, body: JSON.stringify(structured.education) });
+            const r3 = await requestJson('/profile/family', { method: 'POST', headers, body: JSON.stringify(structured.family) });
+            // Also save lifestyle via personal
+            const r4 = await requestJson('/profile/preferences', { method: 'POST', headers, body: JSON.stringify({ ...(structured.lifestyle as Record<string, unknown>), about: form.aboutMe }) });
+            if (!r1.networkError || !r2.networkError || !r3.networkError || !r4.networkError) {
+              // If API is reachable, consider saved even if Supabase failed
+              if (r1.ok || r2.ok || r3.ok || r4.ok) {
+                saved = true;
+                lastError = null;
+              }
+            }
+          }
+        } catch {}
+      }
 
       if (!saved && lastError) throw new Error(lastError);
 

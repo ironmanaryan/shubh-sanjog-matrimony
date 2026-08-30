@@ -70,26 +70,30 @@ export async function middleware(request: NextRequest) {
     }
 
     // Logged in — check if profile is completed
+    // If profiles table is missing (PGRST205), treat as completed to avoid infinite redirect until migration is run
     let isCompleted = false;
+    let tableMissing = false;
     try {
-      const { data: profile } = await supabase
+      const { data: profile, error } = await supabase
         .from('profiles')
         .select('is_completed')
         .or(`id.eq.${user.id},user_id.eq.${user.id}`)
         .maybeSingle();
+      if (error && (error as { code?: string }).code === 'PGRST205') tableMissing = true;
       if (profile) {
         const v = (profile as Record<string, unknown>)['is_completed'];
         isCompleted = v === true || v === 'true' || v === 1 || v === '1';
       }
     } catch {}
 
-    if (!isCompleted) {
+    if (!isCompleted && !tableMissing) {
       try {
-        const { data: byId } = await supabase
+        const { data: byId, error } = await supabase
           .from('profiles')
           .select('is_completed')
           .eq('id', user.id)
           .maybeSingle();
+        if (error && (error as { code?: string }).code === 'PGRST205') tableMissing = true;
         if (byId) {
           const v = (byId as Record<string, unknown>)['is_completed'];
           if (v === true || v === 'true' || v === 1) isCompleted = true;
@@ -97,18 +101,24 @@ export async function middleware(request: NextRequest) {
       } catch {}
     }
 
-    if (!isCompleted) {
+    if (!isCompleted && !tableMissing) {
       try {
-        const { data: byUserId } = await supabase
+        const { data: byUserId, error } = await supabase
           .from('profiles')
           .select('is_completed')
           .eq('user_id', user.id)
           .maybeSingle();
+        if (error && (error as { code?: string }).code === 'PGRST205') tableMissing = true;
         if (byUserId) {
           const v = (byUserId as Record<string, unknown>)['is_completed'];
           if (v === true || v === 'true' || v === 1) isCompleted = true;
         }
       } catch {}
+    }
+
+    // If table is missing, allow access (avoid loop) - profile will be handled via Express API fallback
+    if (tableMissing) {
+      isCompleted = true;
     }
 
     if (!isCompleted) {
