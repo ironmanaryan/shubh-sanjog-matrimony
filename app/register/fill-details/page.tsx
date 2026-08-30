@@ -332,7 +332,6 @@ function FillDetailsInner() {
         religion: form.religion || null,
         caste: form.caste || null,
         sub_caste: form.subCaste || null,
-        subCaste: form.subCaste || null,
         mother_tongue: form.motherTongue || null,
         marital_status: form.maritalStatus || null,
         location: form.location || null,
