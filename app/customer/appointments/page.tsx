@@ -1,5 +1,24 @@
 import Link from 'next/link';
-import AppointmentBooking from '../../../components/customer/AppointmentBooking';
+import dynamic from 'next/dynamic';
+import { Loader2 } from 'lucide-react';
+
+// Calendar widget pulls a date library and a customer-only API surface — only
+// people who click into /customer/appointments need it. Lazy-load so the main
+// /customer bundle stays small.
+const AppointmentBooking = dynamic(
+  () => import('../../../components/customer/AppointmentBooking'),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex min-h-[320px] items-center justify-center rounded-2xl border border-[#f2d9a8] bg-white">
+        <div className="flex flex-col items-center gap-3 text-sm text-[#6a4a57]">
+          <Loader2 className="h-6 w-6 animate-spin text-[#7b102d]" />
+          Loading appointment calendar…
+        </div>
+      </div>
+    ),
+  }
+);
 
 export default function CustomerAppointmentsPage() {
   return (

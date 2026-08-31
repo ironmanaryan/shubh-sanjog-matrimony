@@ -12,6 +12,36 @@ import { API, requestJson } from '@/lib/api-client';
 import { getSupabase } from '@/lib/supabase';
 
 // Customer panel sections from the reference scope document
+
+// Narrow `select()` on the three profile lookups below — `profiles` carries
+// JSONB sections and attachment columns that we never read here. The list
+// mirrors what the dashboard actually renders.
+const PROFILE_DISPLAY_COLUMNS = [
+  'status',
+  'full_name', 'fullName', 'gender', 'dob', 'date_of_birth', 'age',
+  'height', 'weight',
+  'religion', 'caste', 'sub_caste', 'subCaste',
+  'mother_tongue', 'motherTongue', 'marital_status', 'maritalStatus',
+  'location', 'city', 'country', 'citizenship',
+  'nri_status', 'nriStatus', 'manglik_status', 'manglikStatus',
+  'horoscope_details', 'horoscopeDetails',
+  'phone', 'phone_number', 'mobile',
+  'highest_qualification', 'qualification', 'highestQualification',
+  'education_details', 'educationDetails',
+  'profession',
+  'job_business', 'jobBusiness', 'company', 'organization',
+  'annual_income', 'annualIncome', 'work_location', 'workLocation',
+  'experience', 'years_of_experience',
+  'food_preference', 'foodPreference', 'smoking', 'drinking',
+  'hobbies', 'interests',
+  'about', 'about_me', 'bio', 'personality',
+  'father_name', 'fatherName', 'father_occupation',
+  'mother_name', 'motherName', 'mother_occupation',
+  'brothers', 'sisters',
+  'photo_url', 'avatar_url', 'profile_photo', 'cloudinary_url', 'personal',
+  'email',
+].join(',');
+
 const navItems = [
   { label: 'Profile Dashboard', icon: Home, href: '/customer' },
   { label: 'Matrimonial Profile', icon: UserRound, href: '/customer/biodata' },
@@ -418,18 +448,18 @@ export default function CustomerDashboardPage() {
         // Try `profiles` table first
         let fetched: Record<string, unknown> | null = null;
         try {
-          const { data } = await supabase.from('profiles').select('*').eq('id', user.id).maybeSingle();
-          if (data) fetched = data as Record<string, unknown>;
+          const { data } = await supabase.from('profiles').select(PROFILE_DISPLAY_COLUMNS).eq('id', user.id).maybeSingle();
+          if (data) fetched = data as unknown as Record<string, unknown>;
         } catch {}
         if (!fetched) {
           try {
-            const { data } = await supabase.from('profiles').select('*').eq('user_id', user.id).maybeSingle();
-            if (data) fetched = data as Record<string, unknown>;
+            const { data } = await supabase.from('profiles').select(PROFILE_DISPLAY_COLUMNS).eq('user_id', user.id).maybeSingle();
+            if (data) fetched = data as unknown as Record<string, unknown>;
           } catch {}
         }
         if (!fetched) {
           try {
-            const { data } = await supabase.from('matrimonial_profiles').select('*').eq('user_id', user.id).maybeSingle();
+            const { data } = await supabase.from('matrimonial_profiles').select('personal, education, family, status').eq('user_id', user.id).maybeSingle();
             if (data) {
               // Normalize matrimonial_profiles shape into flat profile for display
               const mp = data as { personal?: Record<string, unknown>; education?: Record<string, unknown>; family?: Record<string, unknown>; status?: string };
@@ -682,8 +712,15 @@ export default function CustomerDashboardPage() {
                   {(() => {
                     const photoUrl = (supabaseProfile['photo_url'] as string) || (supabaseProfile['avatar_url'] as string) || (supabaseProfile['profile_photo'] as string) || (supabaseProfile['cloudinary_url'] as string) || (supabaseProfile['personal'] as Record<string, unknown>)?.['photoUrl'] as string;
                     return photoUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={photoUrl} alt={String(supabaseProfile['full_name'] || fullName)} className="h-40 w-40 rounded-3xl object-cover shadow-md ring-2 ring-[#f2d9a8]" />
+                      <Image
+                        src={photoUrl}
+                        alt={String(supabaseProfile['full_name'] || fullName)}
+                        width={160}
+                        height={160}
+                        sizes="160px"
+                        quality={75}
+                        className="h-40 w-40 rounded-3xl object-cover shadow-md ring-2 ring-[#f2d9a8]"
+                      />
                     ) : (
                       <div className="flex h-40 w-40 items-center justify-center rounded-3xl bg-gradient-to-br from-[#7b102d] to-[#d4a64a] text-5xl font-black text-white shadow-md">
                         {(String(supabaseProfile['full_name'] || fullName).trim().charAt(0) || 'C').toUpperCase()}

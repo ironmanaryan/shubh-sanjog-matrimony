@@ -2,7 +2,27 @@
 
 import React from 'react';
 import Link from 'next/link';
-import BiodataStepper from '../../../components/customer/BiodataStepper';
+import dynamic from 'next/dynamic';
+import { Loader2 } from 'lucide-react';
+
+// The stepper drives its own data fetching and weighs >20 KB gzipped with its
+// many subsections, validation schemas and Lucide icons. Defer it to a client
+// chunk so the initial /customer/biodata byte budget covers only the chrome
+// above the fold, not the form state machine.
+const BiodataStepper = dynamic(
+  () => import('../../../components/customer/BiodataStepper'),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex min-h-[420px] items-center justify-center rounded-2xl border border-[#f2d9a8] bg-white">
+        <div className="flex flex-col items-center gap-3 text-sm text-[#6a4a57]">
+          <Loader2 className="h-6 w-6 animate-spin text-[#7b102d]" />
+          Loading biodata builder…
+        </div>
+      </div>
+    ),
+  }
+);
 
 export default function BiodataPage() {
   return (

@@ -1,4 +1,5 @@
 import path from 'path';
+import { cache } from 'react';
 
 // Server-only reader for the membership_plans — Supabase PostgreSQL primary,
 // SQLite fallback, seed catalog as last resort. Single source of truth is
@@ -19,7 +20,30 @@ export type MembershipPlan = {
 
 const DB_PATH = path.join(process.cwd(), 'server', 'data', 'database.sqlite');
 
-export async function getMembershipPlans(): Promise<MembershipPlan[]> {
+// Stale-while-revalidate cache. Membership plans almost never change mid-day;
+// caching for 60s drops the per-request Supabase round trip while keeping
+// edits visible within a minute. Next.js's `revalidate` doesn't help here
+// because app/page.tsx is `dynamic = 'force-dynamic'` and a force-dynamic
+// route bypasses the data cache.
+type PlanCacheEntry = { plans: MembershipPlan[]; cachedAt: number };
+const planCache: PlanCacheEntry = { plans: [], cachedAt: 0 };
+const PLAN_TTL_MS = 60_000;
+
+// dedupe repeated getMembershipPlans() calls within a single render
+export const getMembershipPlans = cache(async (): Promise<MembershipPlan[]> => {
+  const now = Date.now();
+  if (planCache.plans.length > 0 && now - planCache.cachedAt < PLAN_TTL_MS) {
+    return planCache.plans;
+  }
+  const fresh = await readPlansFromSource();
+  if (fresh.length > 0) {
+    planCache.plans = fresh;
+    planCache.cachedAt = now;
+  }
+  return fresh.length > 0 ? fresh : planCache.plans;
+});
+
+async function readPlansFromSource(): Promise<MembershipPlan[]> {
   // 1) Supabase PostgreSQL (primary) — uses NEXT_PUBLIC_SUPABASE_URL
   try {
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
@@ -29,7 +53,7 @@ export async function getMembershipPlans(): Promise<MembershipPlan[]> {
       const supabase = createClient(supabaseUrl, supabaseKey);
       const { data, error } = await supabase
         .from('membership_plans')
-        .select('*')
+        .select('tier, name, price, duration_days, meetings_allowed, profiles_min, profiles_max, priority_assistance, description, features, popular')
         .eq('active', true)
         .order('sort_order', { ascending: true });
       if (!error && data && data.length > 0) {

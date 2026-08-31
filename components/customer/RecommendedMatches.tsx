@@ -165,12 +165,20 @@ export default function RecommendedMatches({ initial }: { initial?: MatchProfile
   }, [interests]);
 
   async function toggleShortlist(profileId: string) {
+    const token = localStorage.getItem('token');
+    const previous = shortlist;
+    // Optimistic flip — button re-renders instantly, request fires in the
+    // background. If the server disagrees (e.g. the row was rejected) the
+    // catch block rolls back to the exact prior state.
+    const nextValue = !previous[profileId];
+    setShortlist((s) => ({ ...s, [profileId]: nextValue }));
+
+    if (!token) {
+      setNotice('Please log in to shortlist profiles.');
+      setShortlist(previous);
+      return;
+    }
     try {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        setShortlist((s) => ({ ...s, [profileId]: !s[profileId] }));
-        return;
-      }
       const res = await fetch(`${API}/matches/shortlist`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -178,13 +186,20 @@ export default function RecommendedMatches({ initial }: { initial?: MatchProfile
       });
       if (!res.ok) throw new Error('Failed');
       const json = await res.json();
+      // Reconcile with the server's authoritative list so other tabs' edits
+      // are picked up. Only override if it diverges from our optimistic flip.
       const ids: string[] = json.shortlisted || [];
       const next: Record<string, boolean> = {};
       ids.forEach((id) => (next[id] = true));
+      if (!next[profileId] === nextValue) {
+        // Server still says our optimistic change won → keep it.
+        next[profileId] = nextValue;
+      }
       setShortlist(next);
     } catch (err) {
       console.error('shortlist err', err);
-      alert('Failed to update shortlist');
+      setShortlist(previous);
+      setNotice('Could not update the shortlist — please try again.');
     }
   }
 
@@ -194,6 +209,27 @@ export default function RecommendedMatches({ initial }: { initial?: MatchProfile
       setNotice('Please log in to express interest.');
       return;
     }
+    // Optimistic: stamp a Pending badge on the card so the click feels
+    // instant. We use a synthetic sentinel id that the eventual real record
+    // will replace if the server returns its own id.
+    const optimisticId = `optimistic-${profileId}-${Date.now()}`;
+    const previousProfiles = profiles;
+    const previousInterests = interests;
+    setProfiles((current) =>
+      current.map((p) => (p.id === profileId ? { ...p, interestStatus: 'Pending' } : p))
+    );
+    const optimisticInterest: InterestRequest = {
+      id: optimisticId,
+      fromUserId: '',
+      toProfileId: profileId,
+      name: '',
+      status: 'Pending',
+      direction: 'sent',
+      createdAt: Date.now(),
+    };
+    setInterests((current) => [optimisticInterest, ...current]);
+    setNotice('Sending interest…');
+
     try {
       const res = await fetch(`${API}/matches/interest`, {
         method: 'POST',
@@ -205,19 +241,40 @@ export default function RecommendedMatches({ initial }: { initial?: MatchProfile
 
       const request = json.request as InterestRequest | undefined;
       if (request) {
-        setInterests((current) => [{ ...request, direction: 'sent', name: '' }, ...current.filter((r) => !(r.direction === 'sent' && r.toProfileId === profileId))]);
-        setProfiles((current) => current.map((p) => (p.id === profileId ? { ...p, interestStatus: request.status } : p)));
+        // Replace the optimistic sentinel with the server record so the list
+        // converges on the real interest id (used by Accept/Reject later).
+        setInterests((current) =>
+          current.map((r) => (r.id === optimisticId ? { ...request, direction: 'sent', name: '' } : r))
+        );
+        setProfiles((current) =>
+          current.map((p) => (p.id === profileId ? { ...p, interestStatus: request.status } : p))
+        );
       }
-      setNotice(json.alreadySent ? 'You have already expressed interest in this profile.' : 'Interest sent! You will be notified once they respond.');
+      setNotice(
+        json.alreadySent
+          ? 'You have already expressed interest in this profile.'
+          : 'Interest sent! You will be notified once they respond.'
+      );
     } catch (err) {
       console.error('interest err', err);
-      alert('Failed to send interest');
+      // Roll back both the card badge and the optimistic entry.
+      setProfiles(previousProfiles);
+      setInterests(previousInterests);
+      setNotice('Could not send the interest — please try again.');
     }
   }
 
   async function respondToInterest(requestId: string, action: 'accept' | 'reject') {
     const token = localStorage.getItem('token');
     if (!token) return;
+    const previous = interests;
+    const optimisticStatus = action === 'accept' ? 'Accepted' : 'Rejected';
+    // Optimistic — flip the chip immediately.
+    setInterests((current) =>
+      current.map((r) => (r.id === requestId ? { ...r, status: optimisticStatus } : r))
+    );
+    setNotice(action === 'accept' ? 'Accepting…' : 'Rejecting…');
+
     try {
       const res = await fetch(`${API}/matches/interest/respond`, {
         method: 'POST',
@@ -227,11 +284,18 @@ export default function RecommendedMatches({ initial }: { initial?: MatchProfile
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Failed');
       const updated = json.request as InterestRequest;
-      setInterests((current) => current.map((r) => (r.id === requestId ? { ...r, status: updated.status } : r)));
-      setNotice(action === 'accept' ? 'Interest accepted — your contact details are now visible to them.' : 'Interest rejected.');
+      setInterests((current) =>
+        current.map((r) => (r.id === requestId ? { ...r, status: updated.status } : r))
+      );
+      setNotice(
+        action === 'accept'
+          ? 'Interest accepted — your contact details are now visible to them.'
+          : 'Interest rejected.'
+      );
     } catch (err) {
       console.error('respond interest err', err);
-      alert('Could not update the interest request');
+      setInterests(previous);
+      setNotice('Could not update the interest request — please try again.');
     }
   }
 

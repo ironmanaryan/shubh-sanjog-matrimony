@@ -135,11 +135,31 @@ function FillDetailsInner() {
       if (metaName) {
         setForm((prev) => ({ ...prev, fullName: prev.fullName || metaName }));
       }
-      // Prefill from profiles if exists
+      // Prefill from profiles if exists. The form reads ~40 columns, so we
+      // list them explicitly to avoid shipping the full row (which includes
+      // JSONB sections, attachment IDs and audit columns) over the wire on
+      // every page load.
+      const PROFILE_PREFILL_COLUMNS = [
+        'id', 'user_id',
+        'full_name', 'gender', 'dob', 'age', 'height', 'weight',
+        'religion', 'caste', 'sub_caste', 'mother_tongue', 'marital_status',
+        'city', 'country', 'citizenship', 'nri_status', 'manglik_status',
+        'horoscope_details', 'phone', 'phone_number', 'mobile',
+        'highest_qualification', 'education_details', 'profession',
+        'job_business', 'company', 'annual_income', 'work_location',
+        'experience', 'food_preference', 'smoking', 'drinking',
+        'hobbies', 'interests', 'about', 'about_myself', 'bio', 'personality',
+        'father_name', 'father_occupation', 'mother_name', 'mother_occupation',
+        'brothers', 'sisters',
+      ].join(',');
       try {
-        const { data } = await supabase.from('profiles').select('*').or(`id.eq.${user.id},user_id.eq.${user.id}`).maybeSingle();
+        const { data } = await supabase
+          .from('profiles')
+          .select(PROFILE_PREFILL_COLUMNS)
+          .or(`id.eq.${user.id},user_id.eq.${user.id}`)
+          .maybeSingle();
         if (data) {
-          const d = data as Record<string, unknown>;
+          const d = data as unknown as Record<string, unknown>;
           const get = (keys: string[]) => {
             for (const k of keys) if (d[k] !== undefined && d[k] !== null && String(d[k]).trim() !== '') return String(d[k]);
             return undefined;

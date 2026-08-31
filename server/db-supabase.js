@@ -437,10 +437,20 @@ async function submitProfileForReviewDb(_ignored, userId, completion) {
     .update({ status: 'Submitted', review_note: null, submitted_at: Date.now(), profile_completion: Number(completion || 0) })
     .eq('user_id', userId);
 }
-async function listProfilesByStatusDb(_ignored, statuses) {
+async function listProfilesByStatusDb(_ignored, statuses, opts = {}) {
   const client = getClient();
   if (!client) return [];
-  const { data } = await client.from(TABLES.profiles).select('*').in('status', statuses).order('submitted_at', { ascending: false });
+  // Pagination defaults to 50 rows per page (was unbounded). Admin tables
+  // can grow fast; the dashboard already uses statusFilter chips — pass
+  // { limit, offset } from the route when the client requests more.
+  const limit = Number(opts.limit) > 0 ? Number(opts.limit) : 50;
+  const offset = Number(opts.offset) >= 0 ? Number(opts.offset) : 0;
+  const { data } = await client
+    .from(TABLES.profiles)
+    .select('user_id, personal, education, family, preferences, privacy, profile_completion, status, review_note, submitted_at, reviewed_at, updated_at')
+    .in('status', statuses)
+    .order('submitted_at', { ascending: false })
+    .range(offset, offset + limit - 1);
   const out = [];
   for (const row of data || []) {
     const mapped = {
@@ -574,16 +584,34 @@ async function getPaymentById(_ignored, id) {
 async function getPaymentByOrderId(_ignored, orderId) {
   return getPaymentById(null, orderId);
 }
-async function listPayments() {
+async function listPayments(opts = {}) {
   const client = getClient();
   if (!client) return [];
-  const { data } = await client.from(TABLES.payments).select('*').order('created_at', { ascending: false });
+  // Default cap of 100 rows; admins can request more via { limit, offset }.
+  // Without this the payload grows unbounded as the payments table fills up,
+  // and the admin dashboard's "Pending review" tab was known to fetch all
+  // rows when the in-memory store is not yet hydrated.
+  const limit = Number(opts.limit) > 0 ? Number(opts.limit) : 100;
+  const offset = Number(opts.offset) >= 0 ? Number(opts.offset) : 0;
+  const { data } = await client
+    .from(TABLES.payments)
+    .select('id, user_id, plan, amount, upi_id, utr, receipt_path, cloudinary_url, receipt_name, receipt_mimetype, receipt_size, gateway, status, rejection_reason, created_at, reviewed_at')
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1);
   return (data || []).map((r) => ({ id: r.id, userId: r.user_id, plan: r.plan, amount: r.amount, upiId: r.upi_id, utr: r.utr, receiptPath: r.receipt_path || r.cloudinary_url, cloudinaryUrl: r.cloudinary_url, receiptName: r.receipt_name, receiptMimetype: r.receipt_mimetype, receiptSize: r.receipt_size, gateway: r.gateway, status: r.status, rejectionReason: r.rejection_reason, createdAt: r.created_at, reviewedAt: r.reviewed_at }));
 }
-async function listPaymentsByUserDb(_ignored, userId) {
+async function listPaymentsByUserDb(_ignored, userId, opts = {}) {
   const client = getClient();
   if (!client) return [];
-  const { data } = await client.from(TABLES.payments).select('*').eq('user_id', userId).order('created_at', { ascending: false });
+  // Same cap-by-default guard: 50 most recent rows.
+  const limit = Number(opts.limit) > 0 ? Number(opts.limit) : 50;
+  const offset = Number(opts.offset) >= 0 ? Number(opts.offset) : 0;
+  const { data } = await client
+    .from(TABLES.payments)
+    .select('id, user_id, plan, amount, upi_id, utr, receipt_path, cloudinary_url, receipt_name, receipt_mimetype, receipt_size, gateway, status, rejection_reason, created_at, reviewed_at')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .range(offset, offset + limit - 1);
   return (data || []).map((r) => ({ id: r.id, userId: r.user_id, plan: r.plan, amount: r.amount, upiId: r.upi_id, utr: r.utr, receiptPath: r.receipt_path || r.cloudinary_url, cloudinaryUrl: r.cloudinary_url, receiptName: r.receipt_name, receiptMimetype: r.receipt_mimetype, receiptSize: r.receipt_size, gateway: r.gateway, status: r.status, rejectionReason: r.rejection_reason, createdAt: r.created_at, reviewedAt: r.reviewed_at }));
 }
 

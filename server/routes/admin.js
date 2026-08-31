@@ -304,8 +304,12 @@ router.get('/profiles', verifyTokenMiddleware, requirePermission('viewQueues'), 
   try {
     const statusParam = String(req.query.status || '').trim();
     const statuses = statusParam ? [statusParam] : ['Submitted', 'Under Review'];
-    const rows = await db.listProfilesByStatusDb(db._db, statuses);
-    return res.json({ ok: true, profiles: rows.map(toProfileReviewView) });
+    // Pagination — admins can ask for more with ?limit=N&offset=M. Cap at 200
+    // so a single page request can never tank the dashboard.
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const offset = Math.max(Number(req.query.offset) || 0, 0);
+    const rows = await db.listProfilesByStatusDb(db._db, statuses, { limit, offset });
+    return res.json({ ok: true, profiles: rows.map(toProfileReviewView), limit, offset });
   } catch (error) {
     console.error('admin list profiles error', error);
     return res.status(500).json({ ok: false, error: 'Server error' });

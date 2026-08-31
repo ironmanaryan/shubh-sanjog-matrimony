@@ -20,6 +20,7 @@ import Button from '@/components/ui/button';
 import Reveal from '@/components/ui/reveal';
 import PlanCards from '../components/PlanCards';
 import { getMembershipPlans } from '../lib/plans';
+import { HERO_BLUR_DATA_URL } from '../lib/hero-blur';
 
 // Public landing page. Pricing is rendered server-side from the SQLite
 // `membership_plans` table (single source of truth) — never hardcoded here.
@@ -274,6 +275,8 @@ export default async function HomePage() {
                     preload
                     quality={85}
                     sizes="(min-width: 1024px) 46vw, (min-width: 640px) 90vw, 100vw"
+                    placeholder="blur"
+                    blurDataURL={HERO_BLUR_DATA_URL}
                     className="object-cover object-center"
                   />
                   {/* warm gradient blend so the frame melts into the theme */}

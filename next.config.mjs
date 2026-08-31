@@ -23,7 +23,15 @@ const nextConfig = {
   images: {
     // Next.js 16 requires an explicit allowlist — `quality={85}` on the hero
     // <Image /> would otherwise log a config warning at render time.
-    qualities: [75, 85],
+    qualities: [60, 75, 85],
+    // avif is the smallest; webp is the universal fallback. Browsers that
+    // support neither fall back to jpeg. AVIF still renders ~30% smaller than
+    // webp on the hero, which is the largest single asset on first paint.
+    formats: ['image/avif', 'image/webp'],
+    // Minimum cache TTL on the Vercel Image Optimization CDN. Match photos
+    // and admin avatars are immutable so a long TTL is safe; this also
+    // protects from re-encoding the same assets on every deploy.
+    minimumCacheTTL: 60 * 60 * 24 * 30, // 30 days
     remotePatterns: [
       {
         protocol: 'https',
