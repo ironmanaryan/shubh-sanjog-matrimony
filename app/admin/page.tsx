@@ -99,6 +99,64 @@ type AuditLogRow = {
 
 const AUDIT_FILTER_ACTIONS = ['VIEW_DOCUMENT', 'VIEW_PROFILE', 'UPDATE_STATUS', 'DELETE_ACCOUNT', 'CHANGE_ROLE', 'ADD_NOTE', 'MANAGE_MATCH'];
 
+/**
+ * Escape one CSV cell. RFC 4180: quote anything containing comma, quote, or
+ * newline, doubling inner quotes. Falls through non-strings via String().
+ */
+function csvEscape(value: unknown): string {
+  const s = value === null || value === undefined ? '' : String(value);
+  if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+type LiveMetricTone = 'default' | 'emerald' | 'rose' | 'indigo' | 'amber';
+
+const LIVE_TONE_CLASSES: Record<LiveMetricTone, { border: string; tint: string; text: string }> = {
+  default: { border: 'border-[#f2d9a8]', tint: 'bg-white', text: 'text-[#5a3743]' },
+  emerald: { border: 'border-emerald-200', tint: 'bg-emerald-50/40', text: 'text-emerald-700' },
+  rose: { border: 'border-rose-200', tint: 'bg-rose-50/40', text: 'text-rose-700' },
+  indigo: { border: 'border-indigo-200', tint: 'bg-indigo-50/40', text: 'text-indigo-700' },
+  amber: { border: 'border-amber-200', tint: 'bg-amber-50/40', text: 'text-amber-700' },
+};
+
+/**
+ * One metric card. value=null renders "n/a" so the operator can tell the
+ * number is genuinely missing vs. zero. emphasis=true styles the number in
+ * maroon to draw the eye.
+ */
+function LiveMetricCard({
+  label,
+  value,
+  formatter,
+  accent = 'default',
+  emphasis = false,
+}: {
+  label: string;
+  value: number | null | undefined;
+  formatter?: (n: number) => string;
+  accent?: LiveMetricTone;
+  emphasis?: boolean;
+}) {
+  const tones = LIVE_TONE_CLASSES[accent];
+  const display =
+    value === null || value === undefined
+      ? 'n/a'
+      : formatter
+      ? formatter(Number(value))
+      : Number(value).toLocaleString('en-IN');
+  return (
+    <div className={`relative overflow-hidden rounded-2xl border ${tones.border} ${tones.tint} p-4 shadow-sm`}>
+      <div className={`text-xs font-semibold uppercase tracking-wide ${tones.text}`}>{label}</div>
+      <div
+        className={`mt-2 truncate text-2xl font-black ${emphasis ? 'text-[#7b102d]' : 'text-[#2c0d16]'}`}
+        title={typeof display === 'string' ? display : String(display)}
+      >
+        {display}
+      </div>
+    </div>
+  );
+}
+
 function auditActionStyle(action: string): string {
   if (action.startsWith('VIEW_')) return 'bg-[#fff1dc] text-[#8a5a11]';
   if (action === 'DELETE_ACCOUNT') return 'bg-[#ffe5e5] text-[#9b1f2f]';
@@ -139,6 +197,36 @@ type Attention = {
   upcomingAppointments: { id: string; date?: string; time?: string; type?: string; customerName?: string }[];
   recentCustomers: { id: string; identifier?: string; createdAt?: number }[];
   pendingPayments?: { id: string; plan?: string; amount?: number; createdAt?: number; customerName?: string }[];
+};
+
+// --- Live metrics (from /api/admin/metrics) ----------------------------------
+// Mirrors the JSON contract returned by app/api/admin/metrics/route.ts and the
+// Express mirror in server/routes/admin.js. Every numeric field may be null
+// if its underlying query failed; the renderer shows "n/a" rather than 0 for
+// those so the operator can tell something went wrong vs. nothing happened.
+type LiveUserRow = {
+  id: string;
+  identifier: string;
+  email: string | null;
+  full_name: string | null;
+  role: string;
+  created_at: number | string;
+};
+
+type LiveMetrics = {
+  totalCustomers: number | null;
+  newRegistrations: { last7Days: number | null; last30Days: number | null };
+  activeMemberships: number | null;
+  revenue: { membership: number | null; consultation: number | null; total: number | null; currency: 'INR' };
+  payments: { successful: number | null; failed: number | null; pending: number | null };
+  appointments: { upcoming: number | null; completed: number | null; cancelled: number | null };
+  matchmaking: {
+    profileApprovalRate: number | null;
+    totalProfiles: number | null;
+    approvedProfiles: number | null;
+    matchActivity: number | null;
+  };
+  membershipExpiry: { expiringIn7Days: number | null };
 };
 
 type ProfileReviewRow = {
@@ -345,6 +433,16 @@ export default function AdminPage() {
 
   // §31 internal notes drawer target: `${targetType}:${targetId}`
   const [notesFor, setNotesFor] = useState<string | null>(null);
+
+  // Live metrics — pulled from /api/admin/metrics (Supabase). Each sub-metric
+  // is isolated, so a failed query returns null for that card instead of
+  // breaking the whole section.
+  const [liveMetrics, setLiveMetrics] = useState<LiveMetrics | null>(null);
+  const [liveUsers, setLiveUsers] = useState<LiveUserRow[]>([]);
+  const [liveMetricsLoading, setLiveMetricsLoading] = useState(false);
+  const [liveMetricsGeneratedAt, setLiveMetricsGeneratedAt] = useState<string | null>(null);
+  const [liveMetricsSource, setLiveMetricsSource] = useState<'supabase' | 'express-store' | 'fallback-zeros' | null>(null);
+  const [exportBusy, setExportBusy] = useState(false);
 
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
@@ -571,6 +669,7 @@ export default function AdminPage() {
         .catch(() => undefined);
     }
     if (isAdmin) loadTab(tab);
+    if (isAdmin && perms.viewQueues && !liveMetrics && !liveMetricsLoading) fetchLiveMetrics();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin, tab, loadTab]);
 
@@ -624,6 +723,86 @@ export default function AdminPage() {
       setMessage('Analytics exported to CSV.');
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Export failed');
+    }
+  }
+
+  // Live metrics — fetches from /api/admin/metrics (Supabase + Express mirror).
+  // Errors are silenced so the dashboard never shows a red error overlay for a
+  // flaky API; the section just keeps the previous data (or shows skeletons).
+  const fetchLiveMetrics = useCallback(async () => {
+    setLiveMetricsLoading(true);
+    try {
+      const res = await fetch(`${API}/admin/metrics`, { headers: authHeaders(), cache: 'no-store' });
+      if (!res.ok) return;
+      const json = await res.json().catch(() => ({}));
+      if (json?.metrics) setLiveMetrics(json.metrics as LiveMetrics);
+      if (Array.isArray(json?.users)) setLiveUsers(json.users as LiveUserRow[]);
+      setLiveMetricsGeneratedAt(typeof json?.generatedAt === 'string' ? json.generatedAt : null);
+      setLiveMetricsSource((json?.source as typeof liveMetricsSource) ?? null);
+    } catch {
+      /* network/down — keep the last good snapshot */
+    } finally {
+      setLiveMetricsLoading(false);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Export the live metrics + top users as a CSV. Built client-side so we don't
+  // need a backend change and so the file always reflects what the operator
+  // currently sees on screen.
+  function exportLiveMetricsCsv() {
+    if (!liveMetrics) return;
+    setExportBusy(true);
+    try {
+      const m = liveMetrics;
+      const rupees = (n: number | null) =>
+        `INR ${Number(n ?? 0).toLocaleString('en-IN')}`;
+      const num = (n: number | null) => (n === null || n === undefined ? 'n/a' : String(n));
+      const today = new Date().toISOString().slice(0, 10);
+
+      const sections: string[][] = [];
+      sections.push(['Shubh Sanjog Matrimony — Live Admin Report']);
+      sections.push([`Generated: ${liveMetricsGeneratedAt || new Date().toISOString()}`]);
+      sections.push([`Source: ${liveMetricsSource || 'unknown'}`]);
+      sections.push([]);
+      sections.push(['Section', 'Metric', 'Value']);
+      sections.push(['Overview', 'Total Customers', num(m.totalCustomers)]);
+      sections.push(['Overview', 'New Registrations (last 7 days)', num(m.newRegistrations?.last7Days)]);
+      sections.push(['Overview', 'New Registrations (last 30 days)', num(m.newRegistrations?.last30Days)]);
+      sections.push(['Memberships', 'Active Memberships', num(m.activeMemberships)]);
+      sections.push(['Memberships', 'Expiring in 7 days', num(m.membershipExpiry?.expiringIn7Days)]);
+      sections.push(['Revenue', 'Membership Revenue', rupees(m.revenue?.membership)]);
+      sections.push(['Revenue', 'Consultation Revenue', rupees(m.revenue?.consultation)]);
+      sections.push(['Revenue', 'Total Revenue', rupees(m.revenue?.total)]);
+      sections.push(['Payments', 'Successful Payments', num(m.payments?.successful)]);
+      sections.push(['Payments', 'Failed Payments', num(m.payments?.failed)]);
+      sections.push(['Payments', 'Pending Payments', num(m.payments?.pending)]);
+      sections.push(['Appointments', 'Upcoming', num(m.appointments?.upcoming)]);
+      sections.push(['Appointments', 'Completed', num(m.appointments?.completed)]);
+      sections.push(['Appointments', 'Cancelled', num(m.appointments?.cancelled)]);
+      sections.push(['Matchmaking', 'Profile Approval Rate (%)', num(m.matchmaking?.profileApprovalRate)]);
+      sections.push(['Matchmaking', 'Total Profiles', num(m.matchmaking?.totalProfiles)]);
+      sections.push(['Matchmaking', 'Approved Profiles', num(m.matchmaking?.approvedProfiles)]);
+      sections.push(['Matchmaking', 'Match Activity (interest requests)', num(m.matchmaking?.matchActivity)]);
+      sections.push([]);
+      sections.push(['Users (top 50)']);
+      sections.push(['ID', 'Identifier', 'Email', 'Full Name', 'Role', 'Created At']);
+      for (const u of liveUsers) {
+        sections.push([u.id, u.identifier || '', u.email || '', u.full_name || '', u.role || '', String(u.created_at)]);
+      }
+
+      const body = sections.map((row) => row.map(csvEscape).join(',')).join('\r\n');
+      const blob = new Blob([body], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `shubh-sanjog-admin-report-${today}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      setMessage('Live report exported.');
+    } finally {
+      setExportBusy(false);
     }
   }
 
@@ -743,6 +922,112 @@ export default function AdminPage() {
                   <div className="mt-3 truncate text-3xl font-black" title={metric.value}>{metric.value}</div>
                 </div>
               ))}
+            </section>
+
+            {/* Live metrics — pulled from /api/admin/metrics. Each card is
+                independent so a single failed query renders "n/a" instead of
+                blocking the whole section. */}
+            <section className="mt-6 rounded-[28px] border border-[#f1d7a6] bg-white p-5 shadow-soft">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h2 className="text-lg font-black">Live metrics</h2>
+                  <p className="text-xs text-[#5a3743]">
+                    {liveMetricsSource
+                      ? `Source: ${liveMetricsSource === 'supabase' ? 'Supabase (live)' : liveMetricsSource === 'express-store' ? 'Express (in-memory)' : 'fallback (zeros)'}`
+                      : 'Awaiting first fetch'}
+                    {liveMetricsGeneratedAt
+                      ? ` · last updated ${new Date(liveMetricsGeneratedAt).toLocaleTimeString()}`
+                      : ''}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={fetchLiveMetrics}
+                    disabled={liveMetricsLoading}
+                    aria-label="Refresh live metrics"
+                    className="inline-flex items-center gap-2 rounded-full border border-[#e5c88d] bg-[#fffaf0] px-4 py-2 text-sm font-semibold text-[#7b102d] transition hover:bg-[#fff3dd] disabled:opacity-60"
+                  >
+                    <svg
+                      width={14}
+                      height={14}
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      className={liveMetricsLoading ? 'animate-spin' : ''}
+                      aria-hidden
+                    >
+                      <path d="M21 12a9 9 0 1 1-3.51-7.13" />
+                      <path d="M21 4v6h-6" />
+                    </svg>
+                    {liveMetricsLoading ? 'Refreshing…' : 'Refresh Data'}
+                  </button>
+                  {perms.exportAnalytics && (
+                    <button
+                      type="button"
+                      onClick={exportLiveMetricsCsv}
+                      disabled={!liveMetrics || exportBusy}
+                      className="inline-flex items-center gap-2 rounded-full bg-[#7b102d] px-4 py-2 text-sm font-bold text-white shadow-lg shadow-[#7b102d]/20 hover:bg-[#68001a] disabled:opacity-40"
+                    >
+                      <Download size={14} />
+                      Export Report (CSV)
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {liveMetricsLoading && !liveMetrics ? (
+                <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-busy="true">
+                  {Array.from({ length: 12 }).map((_, i) => (
+                    <div
+                      key={`live-skel-${i}`}
+                      className="h-24 animate-pulse rounded-2xl border border-[#f2d9a8] bg-gradient-to-r from-[#fffaf3] via-white to-[#fff7e8]"
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <LiveMetricCard label="Total Customers" value={liveMetrics?.totalCustomers} />
+                  <LiveMetricCard label="New Registrations · 7d" value={liveMetrics?.newRegistrations?.last7Days} accent="indigo" />
+                  <LiveMetricCard label="New Registrations · 30d" value={liveMetrics?.newRegistrations?.last30Days} accent="indigo" />
+                  <LiveMetricCard label="Active Memberships" value={liveMetrics?.activeMemberships} accent="emerald" />
+                  <LiveMetricCard
+                    label="Membership Revenue"
+                    value={liveMetrics?.revenue?.membership}
+                    formatter={(n) => rupees(Number(n ?? 0))}
+                    accent="emerald"
+                  />
+                  <LiveMetricCard
+                    label="Consultation Revenue"
+                    value={liveMetrics?.revenue?.consultation}
+                    formatter={(n) => rupees(Number(n ?? 0))}
+                    accent="emerald"
+                  />
+                  <LiveMetricCard
+                    label="Total Revenue"
+                    value={liveMetrics?.revenue?.total}
+                    formatter={(n) => rupees(Number(n ?? 0))}
+                    accent="emerald"
+                    emphasis
+                  />
+                  <LiveMetricCard label="Successful Payments" value={liveMetrics?.payments?.successful} accent="emerald" />
+                  <LiveMetricCard label="Failed Payments" value={liveMetrics?.payments?.failed} accent="rose" />
+                  <LiveMetricCard label="Pending Payments" value={liveMetrics?.payments?.pending} />
+                  <LiveMetricCard label="Upcoming Appointments" value={liveMetrics?.appointments?.upcoming} accent="indigo" />
+                  <LiveMetricCard label="Completed Meetings" value={liveMetrics?.appointments?.completed} accent="indigo" />
+                  <LiveMetricCard
+                    label="Profile Approval Rate"
+                    value={liveMetrics?.matchmaking?.profileApprovalRate}
+                    formatter={(n) => `${Number(n ?? 0)}%`}
+                    accent="emerald"
+                  />
+                  <LiveMetricCard label="Match Activity (interests)" value={liveMetrics?.matchmaking?.matchActivity} accent="rose" />
+                  <LiveMetricCard label="Memberships Expiring · 7d" value={liveMetrics?.membershipExpiry?.expiringIn7Days} accent="amber" emphasis />
+                </div>
+              )}
             </section>
 
             <section className="mt-6 grid gap-6 xl:grid-cols-2">

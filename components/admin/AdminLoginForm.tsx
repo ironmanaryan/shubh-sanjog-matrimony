@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { KeyRound, Lock, User } from 'lucide-react';
 import { persistAdminSession } from '@/lib/admin-session';
@@ -24,16 +24,33 @@ const TONE_CLASSES: Record<Tone, string> = {
 export default function AdminLoginForm({
   onSuccess,
   compact = false,
+  prefill,
 }: {
   /** Called after the session is stored — navigate or reload. */
   onSuccess?: () => void;
   /** Renders the tighter inline variant (no footer links inside the form). */
   compact?: boolean;
+  /**
+   * Imperative handle parents (the Demo banner above the page) can use to type
+   * credentials into the form without re-rendering or stealing focus from the
+   * user-typed values. When `prefill` changes, the form's state is updated and
+   * a small "Filled from demo banner" notice is shown so the user knows.
+   */
+  prefill?: { identifier: string; password: string; nonce?: number } | null;
 }) {
   const [form, setForm] = useState({ identifier: '', password: '' });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [tone, setTone] = useState<Tone>('info');
+
+  // React to demo-fill requests from the parent. nonce ticks on every click so
+  // filling the same credentials twice still re-runs the side effect.
+  useEffect(() => {
+    if (!prefill) return;
+    setForm({ identifier: prefill.identifier, password: prefill.password });
+    setMessage('Demo credentials filled — press Sign in to continue.');
+    setTone('info');
+  }, [prefill?.nonce, prefill?.identifier, prefill?.password]);
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -139,6 +156,11 @@ export default function AdminLoginForm({
         <KeyRound size={16} />
         {busy ? 'Signing in…' : 'Sign in'}
       </button>
+
+      <p className="text-center text-[11px] leading-relaxed text-[#8a7a85]">
+        Real email/username &amp; password login activates automatically once Supabase keys are
+        verified — demo mode provides full test access on data-sparse installs.
+      </p>
 
       {compact && (
         <p className="pt-1 text-center text-xs text-[#8a7a85]">

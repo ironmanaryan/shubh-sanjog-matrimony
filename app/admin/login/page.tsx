@@ -6,6 +6,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { ShieldCheck } from 'lucide-react';
 import AdminLoginForm from '@/components/admin/AdminLoginForm';
+import DemoModeBanner, { DEFAULT_DEMO_CREDENTIALS } from '@/components/admin/DemoModeBanner';
 
 /**
  * /admin/login — standalone admin sign-in.
@@ -13,10 +14,18 @@ import AdminLoginForm from '@/components/admin/AdminLoginForm';
  * Before rendering, it asks /api/admin/setup whether a master admin exists. If
  * not, the visitor is sent to /admin/setup so a brand-new install can create the
  * first account instead of staring at a login form that cannot succeed.
+ *
+ * The page also displays a "Demo Mode Active" banner with one-click Fill so QA
+ * and reviewers don't have to copy-paste the test credentials. The Fill button
+ * only populates the form — submission still goes through the real
+ * /api/admin/login endpoint and is still gated by bcrypt.
  */
 export default function AdminLoginPage() {
   const router = useRouter();
   const [checking, setChecking] = useState(true);
+  const [prefill, setPrefill] = useState<{ identifier: string; password: string; nonce: number } | null>(
+    null
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -41,6 +50,11 @@ export default function AdminLoginPage() {
       cancelled = true;
     };
   }, [router]);
+
+  const handleFill = (creds: { identifier: string; password: string }) => {
+    // nonce ticks each click so React picks up re-fills of the same values.
+    setPrefill({ ...creds, nonce: Date.now() });
+  };
 
   if (checking) {
     return (
@@ -68,7 +82,14 @@ export default function AdminLoginPage() {
           <p className="mt-1.5 text-sm text-[#5a3743]">Sign in with your admin username and password</p>
         </div>
 
-        <AdminLoginForm onSuccess={() => router.replace('/admin')} />
+        <div className="mt-6">
+          <DemoModeBanner onFill={handleFill} credentials={DEFAULT_DEMO_CREDENTIALS} />
+        </div>
+
+        <AdminLoginForm
+          onSuccess={() => router.replace('/admin')}
+          prefill={prefill}
+        />
 
         <p className="mt-6 text-center text-xs text-[#8a7a85]">
           Not an admin?{' '}

@@ -975,4 +975,120 @@ router.delete('/users/:id', verifyTokenMiddleware, requireAdmin, auditTrail('UPD
   }
 });
 
+// --- Live metrics for the dashboard header (cards, charts, CSV) -------------
+//
+// Mirrors app/api/admin/metrics/route.ts but reads from the in-memory hydrated
+// store so the legacy API clients (which still call through the Express API)
+// get the same numbers without two round-trips per refresh.
+router.get('/metrics', verifyTokenMiddleware, requirePermission('viewQueues'), (req, res) => {
+  try {
+    const now = Date.now();
+    const today = new Date().toISOString().slice(0, 10);
+    const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+    const monthAgo = now - 30 * 24 * 60 * 60 * 1000;
+    const weekFromNow = now + 7 * 24 * 60 * 60 * 1000;
+
+    let totalCustomers = 0;
+    let newLast7 = 0;
+    let newLast30 = 0;
+    for (const u of store.users.values()) {
+      if ((u.role || 'customer') === 'admin') continue;
+      totalCustomers += 1;
+      if ((u.createdAt || 0) >= weekAgo) newLast7 += 1;
+      if ((u.createdAt || 0) >= monthAgo) newLast30 += 1;
+    }
+
+    let activeMemberships = 0;
+    let expiring7d = 0;
+    let membershipRevenue = 0;
+    for (const m of store.memberships.values()) {
+      if (!m || !m.active) continue;
+      if (Number(m.expiresAt || 0) < now) continue;
+      activeMemberships += 1;
+      if (Number(m.expiresAt || 0) <= weekFromNow) expiring7d += 1;
+    }
+
+    let successful = 0;
+    let failed = 0;
+    let pending = 0;
+    for (const p of store.payments.values()) {
+      if (p.status === 'Approved') { successful += 1; membershipRevenue += Number(p.amount || 0); }
+      else if (p.status === 'Rejected') failed += 1;
+      else pending += 1;
+    }
+
+    let upcomingAppts = 0;
+    let completedAppts = 0;
+    let cancelledAppts = 0;
+    let consultationCompletions = 0;
+    for (const a of store.appointments.values()) {
+      if (a.status === 'Completed') {
+        completedAppts += 1;
+        if (String(a.type || '').toLowerCase() === 'consultation') consultationCompletions += 1;
+        continue;
+      }
+      if (a.status === 'Cancelled') { cancelledAppts += 1; continue; }
+      if (String(a.date) >= today) upcomingAppts += 1;
+    }
+    const CONSULTATION_FEE = 999;
+    const consultationRevenue = consultationCompletions * CONSULTATION_FEE;
+
+    let totalReviewed = 0;
+    let approvedProfiles = 0;
+    for (const p of store.profiles.values()) {
+      const s = (p.status || '').toLowerCase();
+      if (s === 'approved' || s === 'rejected') totalReviewed += 1;
+      if (s === 'approved') approvedProfiles += 1;
+    }
+    const profileApprovalRate = totalReviewed > 0 ? Math.round((approvedProfiles / totalReviewed) * 100) : 0;
+
+    const matchActivity = (store.interestRequests && store.interestRequests.length) || 0;
+
+    const usersTop = Array.from(store.users.values())
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+      .slice(0, 50)
+      .map((u) => ({
+        id: u.id,
+        identifier: u.identifier || u.email || '',
+        email: u.email || null,
+        full_name: u.fullName || u.full_name || null,
+        role: u.role || 'customer',
+        created_at: u.createdAt || 0,
+      }));
+
+    const recentSignups = usersTop.slice(0, 10);
+
+    return res.json({
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      source: 'express-store',
+      metrics: {
+        totalCustomers,
+        newRegistrations: { last7Days: newLast7, last30Days: newLast30 },
+        activeMemberships,
+        revenue: {
+          membership: membershipRevenue,
+          consultation: consultationRevenue,
+          total: membershipRevenue + consultationRevenue,
+          currency: 'INR',
+        },
+        payments: { successful, failed, pending },
+        appointments: { upcoming: upcomingAppts, completed: completedAppts, cancelled: cancelledAppts },
+        matchmaking: {
+          profileApprovalRate,
+          totalProfiles: store.profiles.size,
+          approvedProfiles,
+          matchActivity,
+        },
+        membershipExpiry: { expiringIn7Days: expiring7d },
+      },
+      users: usersTop,
+      recentSignups,
+    });
+  } catch (err) {
+    console.error('get admin metrics error', err);
+    return res.status(500).json({ ok: false, error: 'Server error' });
+  }
+});
+
 module.exports = router;
