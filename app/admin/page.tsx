@@ -695,6 +695,7 @@ export default function AdminPage() {
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
+              <Link href="/admin/security" className="rounded-full border border-[#e5c88d] bg-[#fffaf0] px-4 py-2 text-center text-sm font-semibold text-[#7b102d] transition hover:bg-[#fff3dd]">Security</Link>
               <Link href="/admin/inquiries" className="rounded-full border border-[#e5c88d] bg-[#fffaf0] px-4 py-2 text-center text-sm font-semibold text-[#7b102d] transition hover:bg-[#fff3dd]">Inquiries</Link>
               <Link href="/" className="rounded-full border border-[#e5c88d] bg-[#fffaf0] px-4 py-2 text-center text-sm font-semibold text-[#7b102d]">Back to site</Link>
             </div>

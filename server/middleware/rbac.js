@@ -70,7 +70,15 @@ function normalizeIdentifierValue(value) {
   return String(value || '').trim().toLowerCase();
 }
 
-const DEFAULT_ADMIN_IDENTIFIERS = ['admin@shubhsanjog.com', 'aryansadanshiv8@gmail.com'];
+// The owner account (aryansadanshiv8@gmail.com) must stay on this list — it is
+// the designated owner per PRD §4. machinesmarvis@gmail.com is the account the
+// `admin_users` master-admin record was created with, so both resolve to ADMIN.
+// Extra addresses can be added at deploy time via the ADMIN_IDENTIFIERS env var.
+const DEFAULT_ADMIN_IDENTIFIERS = [
+  'admin@shubhsanjog.com',
+  'aryansadanshiv8@gmail.com',
+  'machinesmarvis@gmail.com',
+];
 
 const ADMIN_IDENTIFIERS = [
   ...DEFAULT_ADMIN_IDENTIFIERS,

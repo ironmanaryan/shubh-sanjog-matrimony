@@ -14,7 +14,8 @@
     "smoke:auth": "node scripts/auth-smoke.js",
     "smoke:ui": "node scripts/ui-smoke.js",
     "e2e:signin": "node scripts/e2e-signin.js",
-    "e2e:prod-google": "node scripts/prod-google-check.js"
+    "e2e:prod-google": "node scripts/prod-google-check.js",
+    "admin:db-setup": "node scripts/admin-db-setup.js"
   },
   "keywords": [],
   "author": "",
@@ -23,6 +24,7 @@
     "@supabase/auth-helpers-nextjs": "^0.15.0",
     "@supabase/ssr": "^0.12.5",
     "@supabase/supabase-js": "^2.112.4",
+    "bcryptjs": "^3.0.3",
     "cloudinary": "^2.5.1",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
@@ -42,7 +44,10 @@
     "uuid": "^14.0.2"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.2.0",
+    "@types/nodemailer": "^8.0.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "autoprefixer": "^10.5.4",

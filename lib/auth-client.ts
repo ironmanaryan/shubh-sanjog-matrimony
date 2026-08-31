@@ -38,7 +38,12 @@ const UNREACHABLE_ERROR =
  * treated as administrators. Real authorization is always enforced server-side
  * by server/middleware/rbac.js — this list only decides which UI to show.
  */
-const DEFAULT_ADMIN_IDENTIFIERS = ['admin@shubhsanjog.com', 'aryansadanshiv8@gmail.com'];
+// Keep in sync with DEFAULT_ADMIN_IDENTIFIERS in server/middleware/rbac.js.
+const DEFAULT_ADMIN_IDENTIFIERS = [
+  'admin@shubhsanjog.com',
+  'aryansadanshiv8@gmail.com',
+  'machinesmarvis@gmail.com',
+];
 
 function resolvePreviewRole(identifier: string): string {
   const value = identifier.trim().toLowerCase();
