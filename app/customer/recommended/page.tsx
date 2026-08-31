@@ -5,38 +5,43 @@ import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { Loader2 } from 'lucide-react';
 
+// Skeleton kept as a module-level component (not an inline arrow returning
+// JSX) so the dynamic() loader is a clean function call. Returning JSX
+// directly from an arrow inside dynamic()'s options object was tripping
+// the Vercel build with an EcmaScript parser error.
+function RecommendedMatchesSkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {Array.from({ length: 6 }).map((_, i) => (
+        <div
+          key={i}
+          className="overflow-hidden rounded-2xl border border-[#f2d9a8] bg-[#fffaf3]"
+        >
+          <div className="h-44 w-full animate-pulse bg-gradient-to-br from-[#f6e8d8] via-[#f2d9a8] to-[#efd9bd]" />
+          <div className="space-y-3 p-4">
+            <div className="h-5 w-2/3 animate-pulse rounded bg-[#f2d9a8]/60" />
+            <div className="h-3 w-1/2 animate-pulse rounded bg-[#f2d9a8]/40" />
+            <div className="flex gap-2">
+              <div className="h-8 w-20 animate-pulse rounded-full bg-[#f2d9a8]/40" />
+              <div className="h-8 w-32 animate-pulse rounded-full bg-[#f2d9a8]/40" />
+            </div>
+          </div>
+        </div>
+      ))}
+      <div className="col-span-full mt-4 flex items-center justify-center gap-2 text-xs text-[#6a4a57]">
+        <Loader2 className="h-4 w-4 animate-spin text-[#7b102d]" />
+        Finding your best matches…
+      </div>
+    </div>
+  );
+}
+
 // Compatibility scoring + many icon imports = biggest single client component
 // in the customer area. Defer until after first paint so the route lands
 // immediately and the cards stream in.
 const RecommendedMatches = dynamic(
   () => import('../../../components/customer/RecommendedMatches'),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <div
-            key={i}
-            className="overflow-hidden rounded-2xl border border-[#f2d9a8] bg-[#fffaf3]"
-          >
-            <div className="h-44 w-full animate-pulse bg-gradient-to-br from-[#f6e8d8] via-[#f2d9a8] to-[#efd9bd]" />
-            <div className="space-y-3 p-4">
-              <div className="h-5 w-2/3 animate-pulse rounded bg-[#f2d9a8]/60" />
-              <div className="h-3 w-1/2 animate-pulse rounded bg-[#f2d9a8]/40" />
-              <div className="flex gap-2">
-                <div className="h-8 w-20 animate-pulse rounded-full bg-[#f2d9a8]/40" />
-                <div className="h-8 w-32 animate-pulse rounded-full bg-[#f2d9a8]/40" />
-              </div>
-            </div>
-          </div>
-        ))}
-        <div className="col-span-full mt-4 flex items-center justify-center gap-2 text-xs text-[#6a4a57]">
-          <Loader2 className="h-4 w-4 animate-spin text-[#7b102d]" />
-          Finding your best matches…
-        </div>
-      </div>
-    ),
-  }
+  { ssr: false, loading: () => <RecommendedMatchesSkeleton /> }
 );
 
 export default function RecommendedPage() {
