@@ -166,33 +166,74 @@ export default async function HomePage() {
 
   return (
     <div>
-      {/* ─── Hero: symmetrical two-column grid (copy ⇆ imagery) ─────────── */}
-      <section className="relative overflow-hidden">
-        <div aria-hidden="true" className="absolute inset-0 bg-hero-glow" />
-        <div aria-hidden="true" className="absolute -left-28 top-20 h-72 w-72 rounded-full bg-luxe-gold/15 blur-3xl" />
-        <div aria-hidden="true" className="absolute -right-24 bottom-8 h-80 w-80 rounded-full bg-royal/10 blur-3xl" />
-        <div aria-hidden="true" className="absolute inset-x-0 bottom-0 h-px gold-rule opacity-70" />
+      {/* ─── Hero: full-bleed bride & groom backdrop with overlaid copy ───── */}
+      {/* Sizing contract:
+          · mobile  → h-[90vh] so the browser chrome stays partly visible and
+                      the first scroll doesn't feel like a cliff
+          · sm up   → h-screen for a true full-bleed cinematic first paint
+          · floor   → min-h-[600px] so short landscape windows never squash it
+          `overflow-x-hidden` guarantees zero horizontal overflow, and
+          `touch-pan-y` keeps vertical touch scrolling smooth while the browser
+          swallows horizontal drags. `isolate` opens the stacking context that
+          the -z-10 background layers sit inside.
 
-        {/* Symmetrical 2-column grid: equal-width tracks, both cells stretching
-            to one shared row height so the frame aligns flush with the copy. */}
-        <div className="relative mx-auto grid max-w-7xl items-stretch gap-8 px-4 pb-10 pt-8 sm:gap-12 sm:px-6 sm:pb-16 sm:pt-14 lg:grid-cols-2 lg:gap-12 lg:pb-24 lg:pt-24 xl:gap-14">
-          {/* Left column — copy (vertically centred against the imagery) */}
-          <div className="order-2 flex flex-col justify-center lg:order-1">
+          The negative top margins cancel the sticky header's height (h-16 /
+          sm:h-[72px] / lg:h-[76px]) so the hero starts at y=0 and genuinely
+          fills the viewport instead of hanging below the fold. The header
+          (z-50) paints on top of it. */}
+      <section className="relative isolate -mt-16 h-[90vh] min-h-[600px] w-full touch-pan-y overflow-x-hidden bg-no-repeat sm:-mt-[72px] sm:h-screen lg:-mt-[76px]">
+        {/* The photograph IS the LCP element, so it is preloaded and served at
+            100vw. object-cover + object-center keeps the couple framed at every
+            aspect ratio. */}
+        <Image
+          src={HERO_IMAGE}
+          alt="Traditional Indian bride in a regal red lehenga beside the groom in an embroidered cream sherwani and maroon safa"
+          fill
+          preload
+          quality={85}
+          sizes="100vw"
+          className="-z-10 object-cover object-center"
+        />
+
+        {/* Readability scrims. Three stacked layers, all decorative:
+            1. horizontal wash — darkest behind the copy column
+            2. vertical wash   — grounds the bottom edge, lifts the top
+            3. cream fade      — melts the hero into the page background
+                                 (#fffaf8) so there is no hard cut-off */}
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 -z-10 bg-gradient-to-r from-[#2c0d16]/95 via-[#2c0d16]/65 to-[#2c0d16]/25"
+        />
+        <div
+          aria-hidden="true"
+          className="absolute inset-0 -z-10 bg-gradient-to-t from-[#2c0d16]/80 via-transparent to-[#2c0d16]/45"
+        />
+        <div
+          aria-hidden="true"
+          className="absolute inset-x-0 bottom-0 -z-10 h-28 bg-gradient-to-t from-[#fffaf8] via-[#fffaf8]/60 to-transparent"
+        />
+        <div aria-hidden="true" className="absolute inset-x-0 bottom-0 -z-10 h-px gold-rule opacity-60" />
+
+        {/* Copy sits in the left column on every breakpoint. `overflow-y-auto`
+            is a safety valve: on unusually short windows the content scrolls
+            inside the hero instead of spilling over the section below. */}
+        <div className="relative z-10 mx-auto flex h-full max-w-7xl flex-col justify-center overflow-y-auto px-4 pb-20 pt-24 sm:px-6 sm:pb-24 sm:pt-28 lg:px-8 lg:pt-32">
+          <div className="max-w-2xl">
             <Reveal>
-              <span className="mb-6 inline-flex items-center gap-2 rounded-full border border-luxe-gold/60 bg-white/70 px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] text-royal shadow-luxe-sm backdrop-blur-md">
-                <Sparkles size={14} className="text-luxe-gold-deep" />
+              <span className="inline-flex items-center gap-2 rounded-full border border-luxe-gold/50 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] text-luxe-gold-soft shadow-luxe-sm backdrop-blur-md">
+                <Sparkles size={14} className="text-luxe-gold" />
                 Trusted by 4,50,000+ families
               </span>
             </Reveal>
 
             <Reveal delay={120}>
-              <h1 className="font-display text-5xl leading-[1.04] text-[#2c0d16] sm:text-6xl">
-                Find your <span className="italic text-gradient-royal">forever</span> with grace.
+              <h1 className="mt-6 font-display text-4xl leading-[1.06] text-white drop-shadow-[0_2px_20px_rgba(44,13,22,0.55)] sm:text-5xl lg:text-6xl">
+                Find your <span className="italic text-luxe-gold-soft">forever</span> with grace.
               </h1>
             </Reveal>
 
             <Reveal delay={220}>
-              <p className="mt-6 max-w-xl text-lg leading-8 text-[#5a3743]">
+              <p className="mt-6 max-w-xl text-base leading-8 text-white/85 drop-shadow-[0_1px_10px_rgba(44,13,22,0.45)] sm:text-lg">
                 Discover meaningful connections built on shared values, family harmony, and long-term compatibility
                 through a safe and respectful matchmaking journey.
               </p>
@@ -200,11 +241,16 @@ export default async function HomePage() {
 
             <Reveal delay={320}>
               <div className="mt-9 flex flex-col gap-4 sm:flex-row">
-                <Button href="/register" size="lg">
+                <Button href="/register" size="lg" variant="gold">
                   Create Your Profile
                   <ArrowRight size={18} />
                 </Button>
-                <Button href="#plans" variant="outline" size="lg">
+                <Button
+                  href="#plans"
+                  variant="outline"
+                  size="lg"
+                  className="border-white/70 bg-white/10 text-white hover:border-white hover:bg-white/20 hover:text-white"
+                >
                   View Membership Plans
                 </Button>
               </div>
@@ -219,9 +265,9 @@ export default async function HomePage() {
                 ].map(({ icon: Icon, label }) => (
                   <li
                     key={label}
-                    className="inline-flex items-center gap-2 rounded-full border border-white/60 bg-white/60 px-3.5 py-1.5 text-xs font-semibold text-royal-deep shadow-sm backdrop-blur-md"
+                    className="inline-flex items-center gap-2 rounded-full border border-white/25 bg-white/10 px-3.5 py-1.5 text-xs font-semibold text-white/90 backdrop-blur-md"
                   >
-                    <Icon size={13} className="text-luxe-gold-deep" />
+                    <Icon size={13} className="text-luxe-gold-soft" />
                     {label}
                   </li>
                 ))}
@@ -231,78 +277,27 @@ export default async function HomePage() {
             <Reveal delay={520}>
               <div className="mt-9 grid max-w-lg grid-cols-3 gap-3 sm:gap-4">
                 {stats.map((stat) => (
-                  <div key={stat.label} className="glass-panel card-hover rounded-2xl px-3.5 py-4 shadow-luxe-sm sm:px-4">
-                    <div className="font-display text-2xl font-bold text-royal sm:text-3xl">{stat.value}</div>
-                    <div className="mt-1.5 text-[11px] leading-4 text-[#5a3743] sm:text-sm">{stat.label}</div>
+                  <div
+                    key={stat.label}
+                    className="rounded-2xl border border-white/20 bg-white/10 px-3.5 py-4 shadow-luxe-sm backdrop-blur-md sm:px-4"
+                  >
+                    <div className="font-display text-2xl font-bold text-luxe-gold-soft sm:text-3xl">{stat.value}</div>
+                    <div className="mt-1.5 text-[11px] leading-4 text-white/80 sm:text-sm">{stat.label}</div>
                   </div>
                 ))}
               </div>
             </Reveal>
 
             <Reveal delay={600}>
-              <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm font-medium text-[#6f4a57]">
-                <Link href="/login" className="underline-offset-4 transition hover:text-royal hover:underline">
+              {/* NOTE: the old "Admin Panel" shortcut lived here. Removed —
+                  /admin is now an unlisted route reachable only by URL. */}
+              <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm font-medium text-white/80">
+                <Link href="/login" className="underline-offset-4 transition hover:text-white hover:underline">
                   Customer Login
-                </Link>
-                <span aria-hidden="true" className="hidden h-3.5 w-px bg-luxe-gold/60 sm:block" />
-                <Link href="/admin" className="underline-offset-4 transition hover:text-royal hover:underline">
-                  Admin Panel
                 </Link>
               </div>
             </Reveal>
           </div>
-
-          {/* Right column — traditional Indian bride & groom in royal wedding
-              attire. Height-capped on phones/tablets so the photo takes less
-              vertical space; stretches flush with the copy from lg up. */}
-          <Reveal delay={180} className="order-1 my-2 max-h-[320px] sm:max-h-[420px] lg:order-2 lg:my-0 lg:h-full">
-            <div className="relative mx-auto flex h-full w-full max-w-md flex-col justify-center sm:max-w-lg lg:max-w-none">
-              {/* soft gold-maroon aura behind the frame */}
-              <div
-                aria-hidden="true"
-                className="absolute -inset-5 rounded-[44px] bg-gradient-to-br from-luxe-gold/25 via-transparent to-royal/25 blur-2xl"
-              />
-
-              <figure className="card-hover relative m-0 h-full w-full overflow-hidden rounded-[36px] border border-luxe-gold/60 bg-luxe-cream shadow-luxe">
-                {/* Mobile: capped height so the photo never eats the whole
-                    viewport; desktop: stretch flush with the copy column. */}
-                <div className="relative mx-auto aspect-[4/5] max-h-[320px] w-full sm:max-h-[420px] lg:max-h-none lg:aspect-auto lg:h-full lg:min-h-[540px]">
-                  <Image
-                    src={HERO_IMAGE}
-                    alt="Traditional Indian bride in a regal red lehenga beside the groom in an embroidered cream sherwani and maroon safa"
-                    fill
-                    preload
-                    quality={85}
-                    sizes="(min-width: 1024px) 46vw, (min-width: 640px) 90vw, 100vw"
-                    className="object-cover object-center"
-                  />
-                  {/* warm gradient blend so the frame melts into the theme */}
-                  <div aria-hidden="true" className="absolute inset-0 bg-gradient-to-t from-royal-deep/25 via-transparent to-transparent" />
-                  <div aria-hidden="true" className="absolute inset-x-0 bottom-0 h-px gold-rule" />
-
-                  {/* floating accent chips — mirrored corners for symmetry */}
-                  <span className="absolute left-4 top-4 inline-flex items-center gap-2 rounded-full border border-luxe-gold/60 bg-white/85 px-3.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-royal shadow-luxe-sm backdrop-blur-md sm:left-5 sm:top-5">
-                    <Sparkles size={12} className="text-luxe-gold-deep" />
-                    Royal Weddings
-                  </span>
-                  <span className="absolute bottom-4 right-4 inline-flex items-center gap-2 rounded-full border border-white/40 bg-royal/90 px-3.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-luxe-gold-soft shadow-luxe-sm backdrop-blur-md sm:bottom-5 sm:right-5">
-                    <ShieldCheck size={12} />
-                    Verified Matches
-                  </span>
-                </div>
-              </figure>
-
-              {/* decorative gold accents */}
-              <div
-                aria-hidden="true"
-                className="absolute -bottom-6 -left-6 -z-10 hidden h-28 w-28 rounded-full border-2 border-luxe-gold/40 lg:block"
-              />
-              <div
-                aria-hidden="true"
-                className="absolute -right-5 -top-5 -z-10 hidden h-20 w-20 rounded-full bg-gradient-to-br from-luxe-gold/30 to-transparent lg:block"
-              />
-            </div>
-          </Reveal>
         </div>
       </section>
 
