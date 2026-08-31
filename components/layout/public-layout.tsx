@@ -34,9 +34,12 @@ const moreLinks = [
   { label: 'Terms & Conditions', href: '/terms', icon: FileText },
 ];
 
+// Quick-view shortcuts for the header "Views" dropdown and the mobile drawer.
+// NOTE: `/admin` intentionally has no entry here — it is an unlisted route
+// reached by typing the URL directly. The route itself stays live in the App
+// Router (app/admin/page.tsx); only the public shortcut is withheld.
 const viewLinks = [
   { label: 'Customer View', href: '/customer' },
-  { label: 'Admin View', href: '/admin' },
 ];
 
 export default function PublicLayout({ children }: { children: React.ReactNode }) {
@@ -199,15 +202,6 @@ export default function PublicLayout({ children }: { children: React.ReactNode }
                   >
                     <UserRound size={15} className="text-[#b08a95]" />
                     Customer View
-                  </Link>
-                  <Link
-                    role="menuitem"
-                    href="/admin"
-                    onClick={() => setViewsOpen(false)}
-                    className="flex items-center gap-2.5 whitespace-nowrap rounded-xl px-3 py-2.5 text-sm font-medium text-[#4a2a35] transition-colors duration-150 hover:bg-rose-50 hover:text-[#800020]"
-                  >
-                    <ShieldCheck size={15} className="text-[#b08a95]" />
-                    Admin View
                   </Link>
                 </div>
               )}
