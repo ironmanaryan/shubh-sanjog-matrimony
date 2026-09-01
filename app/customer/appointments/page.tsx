@@ -1,31 +1,11 @@
 import Link from 'next/link';
-import dynamic from 'next/dynamic';
-import { Loader2 } from 'lucide-react';
+import AppointmentBookingLoader from '../../../components/customer/AppointmentBookingLoader';
 
-// Skeleton kept as a module-level React component so the dynamic() loader
-// is a plain function reference rather than an arrow that returns JSX inside
-// dynamic()'s options object. (Returning JSX from an arrow inside the
-// options object was tripping the Vercel build with an ECMAScript parser
-// error at line 8 — see "Ecma file had an error … page.tsx:8:28".) The
-// loader now just calls this component.
-function AppointmentBookingSkeleton() {
-  return (
-    <div className="flex min-h-[320px] items-center justify-center rounded-2xl border border-[#f2d9a8] bg-white">
-      <div className="flex flex-col items-center gap-3 text-sm text-[#6a4a57]">
-        <Loader2 className="h-6 w-6 animate-spin text-[#7b102d]" />
-        Loading appointment calendar…
-      </div>
-    </div>
-  );
-}
-
-// Calendar widget pulls a date library and a customer-only API surface — only
-// people who click into /customer/appointments need it. Lazy-load so the main
-// /customer bundle stays small.
-const AppointmentBooking = dynamic(
-  () => import('../../../components/customer/AppointmentBooking'),
-  { ssr: false, loading: () => <AppointmentBookingSkeleton /> }
-);
+// Calendar widget pulls a date library and a customer-only API surface —
+// only people who click into /customer/appointments need it. The actual
+// next/dynamic(..., { ssr: false }) call lives inside the loader Client
+// Component, because Next 16 forbids ssr:false inside Server Components
+// (see node_modules/next/dist/docs/01-app/02-guides/lazy-loading.md).
 
 export default function CustomerAppointmentsPage() {
   return (
@@ -41,7 +21,7 @@ export default function CustomerAppointmentsPage() {
           </div>
         </div>
 
-        <AppointmentBooking />
+        <AppointmentBookingLoader />
       </div>
     </div>
   );
