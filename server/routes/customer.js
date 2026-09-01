@@ -302,4 +302,39 @@ router.put('/privacy', verifyTokenMiddleware, updatePrivacy);
 router.post('/delete-account', verifyTokenMiddleware, deleteAccount);
 router.get('/activity', verifyTokenMiddleware, getActivity);
 
+/**
+ * POST /api/customer/activity-log — self-report a non-customer-server action
+ * (e.g. avatar upload to Supabase Storage from the browser) so it shows up in
+ * the admin live-activity feed. Body: { action, detail? }.
+ *
+ * The action must be in the allowlist below — this is a SECURITY surface
+ * (anything we log here is visible to admins), so unsanctioned actions are
+ * quietly rejected with 400.
+ */
+const CUSTOMER_ACTIVITY_ACTIONS = new Set([
+  'PROFILE_PHOTO_CHANGE',
+  'PROFILE_PHOTO_REMOVE',
+  'PROFILE_UPDATE',
+]);
+router.post('/activity-log', verifyTokenMiddleware, async (req, res) => {
+  try {
+    const action = String(req.body?.action || '').trim();
+    if (!CUSTOMER_ACTIVITY_ACTIONS.has(action)) {
+      return res.status(400).json({ ok: false, error: 'Unknown action' });
+    }
+    const detail = String(req.body?.detail || '').slice(0, 500);
+    writeAuditLog({
+      actorId: req.user.id,
+      action,
+      targetUserId: req.user.id,
+      ip: clientIp(req),
+      detail,
+    }).catch(() => {});
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('customer activity-log', err);
+    return res.status(500).json({ ok: false, error: 'Server error' });
+  }
+});
+
 module.exports = router;

@@ -763,6 +763,10 @@ async function setDocumentStatus(db, id, status, rejectionReason = null) {
   return db.run(`UPDATE documents SET status = ?, rejectionReason = ? WHERE id = ?`, [status, rejectionReason, id]);
 }
 
+async function deleteDocument(db, id) {
+  return db.run(`DELETE FROM documents WHERE id = ?`, [id]);
+}
+
 async function toggleShortlistDb(db, userId, profileId) {
   const exists = await db.get(`SELECT 1 FROM shortlists WHERE userId = ? AND profileId = ?`, [userId, profileId]);
   if (exists) {
@@ -1037,4 +1041,4 @@ async function saveNotificationDb(db, notification) {
   );
 }
 
-module.exports = { init, hydrateStore, createUser, getUserByIdentifier, getUserById, backfillUserEmail, upsertProfile, getProfile, mapProfileRow, listMembershipPlansDb, getPlanDb, setProfileReview, submitProfileForReviewDb, listProfilesByStatusDb, saveMatchAssignmentDb, listMatchAssignmentsDb, savePrivacyDb, upsertPrivacyOnly, savePayment, setPaymentStatus, getPaymentById, listPayments, listPaymentsByUserDb, saveInterestRequest, updateInterestRequestDb, saveMembershipDb, saveDocument, listDocuments, saveAppointment, listAppointments, setDocumentStatus, toggleShortlistDb, getShortlistDb, addInterestDb, getNotificationsDb, saveNotificationDb, saveInternalNoteDb, listInternalNotesDb, saveInquiryDb, listInquiriesDb, getInquiryByIdDb, setInquiryStatusDb, mapInquiryRow, saveAuditLogDb, listAuditLogsDb, setTokenRevocationDb, anonymizeAndPurgeUser, deleteUserCascade, setUserRole, listUsers, setAppointmentStatusDb, saveOtp, latestActiveOtp, countRecentOtps, incrementOtpAttempts, consumeOtp };
+module.exports = { init, hydrateStore, createUser, getUserByIdentifier, getUserById, backfillUserEmail, upsertProfile, getProfile, mapProfileRow, listMembershipPlansDb, getPlanDb, setProfileReview, submitProfileForReviewDb, listProfilesByStatusDb, saveMatchAssignmentDb, listMatchAssignmentsDb, savePrivacyDb, upsertPrivacyOnly, savePayment, setPaymentStatus, getPaymentById, listPayments, listPaymentsByUserDb, saveInterestRequest, updateInterestRequestDb, saveMembershipDb, saveDocument, listDocuments, saveAppointment, listAppointments, setDocumentStatus, deleteDocument, toggleShortlistDb, getShortlistDb, addInterestDb, getNotificationsDb, saveNotificationDb, saveInternalNoteDb, listInternalNotesDb, saveInquiryDb, listInquiriesDb, getInquiryByIdDb, setInquiryStatusDb, mapInquiryRow, saveAuditLogDb, listAuditLogsDb, setTokenRevocationDb, anonymizeAndPurgeUser, deleteUserCascade, setUserRole, listUsers, setAppointmentStatusDb, saveOtp, latestActiveOtp, countRecentOtps, incrementOtpAttempts, consumeOtp };

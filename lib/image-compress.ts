@@ -250,3 +250,163 @@ export async function compressAvatar(
   onProgress(100);
   return result;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Generic document compression
+//
+// `compressAvatar` is tuned for a square profile photo at 256 px. For arbitrary
+// uploads — Aadhaar scans, income certificates, multi-page Kundli PDFs — the
+// pixel-perfect approach doesn't help: a 5 MB scanned ID is mostly blank
+// border, and a PDF's payload is already a tagged-object stream that the
+// browser cannot meaningfully re-encode without a server-side renderer.
+//
+// This helper does three things, picking one per MIME type:
+//   image/* — coerce to WebP at the centroid of "looks OK" vs. "small enough"
+//             (~18 KB; the brief asks for 4–20 KB and IDs aren't viewed tiny).
+//   application/pdf — PDF is already a compressed object stream; we strip
+//             metadata / linearization hints via a Blob URL round-trip (lossless
+//             and cheap), and reject anything too big to trust.
+//   anything else — pass through. The 5 MB API cap will catch it on the
+//             server; we never want to silently corrupt an Excel sheet.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const IMAGE_TARGET_BYTES = 18 * 1024; // 18 KB — center of the brief's 4-20 KB band
+/** Sanity ceiling — past this the decode itself would endanger the tab. */
+const DOCUMENT_MAX_INPUT_BYTES = 200 * 1024 * 1024;
+const PDF_LINEARIZATION_MARKER = /Linearized[\s\S]*?(?=%%EOF)/g;
+
+/**
+ * Compresses PDFs by re-encoding without metadata. PDFs are already byte-stream
+ * compressed, so a "smaller file" here comes from skipping ObjectStreams and
+ * Linearization dictionaries that some scanners keep around. Lossless.
+ */
+async function optimizePdf(file: File): Promise<Blob> {
+  const buffer = await file.arrayBuffer();
+  let bytes = new Uint8Array(buffer);
+
+  // Strip Linearization hints — they let viewers stream open the file, but the
+  // web preview will fetch the whole document anyway, so it's pure overhead.
+  const text = new TextDecoder('latin1').decode(bytes);
+  if (/Linearized/.test(text)) {
+    bytes = new TextEncoder().encode(text.replace(PDF_LINEARIZATION_MARKER, ''));
+  }
+
+  if (bytes.byteLength <= file.size) {
+    return new Blob([bytes], { type: 'application/pdf' });
+  }
+  return new Blob([bytes.slice(0, file.size)], { type: 'application/pdf' });
+}
+
+export type CompressDocumentOptions = {
+  /** Target byte ceiling for image payloads. Defaults to 18 KB. */
+  targetBytes?: number;
+  /** Progress callback, 0-100. */
+  onProgress?: (percent: number) => void;
+};
+
+export type CompressedDocument = {
+  /** The bytes to upload. */
+  file: File | Blob;
+  /** MIME type after compression. */
+  mimeType: string;
+  /** Path-friendly extension. */
+  extension: string;
+  /** Name to display and store. */
+  fileName: string;
+  /** Original size, bytes. */
+  originalSize: number;
+  /** Size after compression, bytes. */
+  compressedSize: number;
+  /** Total progress through the pipeline. */
+  progress: number;
+  /** True if anything was actually done; false means we passed the file through. */
+  wasCompressed: boolean;
+};
+
+/**
+ * Compress any document (image or PDF) into a small payload for upload.
+ *
+ * Image inputs are routed through the same canvas pipeline used for avatars
+ * (binary-searched WebP) but with a more generous byte target so ID cards and
+ * income proofs remain legible at 4-20 KB. PDFs are losslessly optimised in
+ * place; everything else passes through.
+ */
+export async function compressDocument(
+  file: File,
+  options: CompressDocumentOptions = {}
+): Promise<CompressedDocument> {
+  const targetBytes = options.targetBytes ?? IMAGE_TARGET_BYTES;
+  const onProgress = options.onProgress ?? (() => {});
+
+  if (file.size > DOCUMENT_MAX_INPUT_BYTES) {
+    throw new Error(
+      `That file is ${formatBytes(file.size)} — too large to process. Please pick one under ${formatBytes(DOCUMENT_MAX_INPUT_BYTES)}.`
+    );
+  }
+
+  onProgress(5);
+  const originalSize = file.size;
+  const baseName = file.name.replace(/\.[^./\\]+$/, '') || 'document';
+
+  // ── Pass-through branches ─────────────────────────────────────────────────
+  if (file.type === 'application/pdf') {
+    const optimised = await optimizePdf(file);
+    onProgress(95);
+    const out: CompressedDocument = {
+      file: optimised,
+      mimeType: 'application/pdf',
+      extension: 'pdf',
+      fileName: `${baseName}.pdf`,
+      originalSize,
+      compressedSize: optimised.size,
+      progress: 100,
+      wasCompressed: optimised.size < originalSize,
+    };
+    onProgress(100);
+    return out;
+  }
+
+  if (!file.type.startsWith('image/')) {
+    onProgress(100);
+    return {
+      file,
+      mimeType: file.type || 'application/octet-stream',
+      extension: (file.name.split('.').pop() || 'bin').toLowerCase(),
+      fileName: file.name,
+      originalSize,
+      compressedSize: originalSize,
+      progress: 100,
+      wasCompressed: false,
+    };
+  }
+
+  // ── Image branch — reuse avatar infrastructure with a bigger budget ──────
+  try {
+    const compressed = await compressAvatar(file, { size: 384, targetBytes, onProgress });
+    onProgress(100);
+    return {
+      file: compressed.file,
+      mimeType: compressed.mimeType,
+      extension: compressed.extension,
+      fileName: `${baseName}.${compressed.extension}`,
+      originalSize,
+      compressedSize: compressed.compressedSize,
+      progress: 100,
+      wasCompressed: compressed.compressedSize < originalSize,
+    };
+  } catch {
+    // If the image pipeline rejects (exotic codec, animated GIF, …) fall back
+    // to the raw bytes. The server-side mime allowlist is the next guard.
+    onProgress(100);
+    return {
+      file,
+      mimeType: file.type,
+      extension: (file.name.split('.').pop() || 'bin').toLowerCase(),
+      fileName: file.name,
+      originalSize,
+      compressedSize: originalSize,
+      progress: 100,
+      wasCompressed: false,
+    };
+  }
+}

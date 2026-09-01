@@ -719,6 +719,18 @@ async function setDocumentStatus(_ignored, id, status, rejectionReason = null) {
   await client.from(TABLES.documents).update({ status, rejection_reason: rejectionReason, reviewed_at: Date.now() }).eq('id', id);
 }
 
+/**
+ * Hard-delete a document row. The caller is responsible for removing the
+ * underlying object from Supabase Storage / Cloudinary first — this only
+ * cleans up the database record. Returns the deleted row count.
+ */
+async function deleteDocument(_ignored, id) {
+  const client = getClient();
+  if (!client) return 0;
+  const { data } = await client.from(TABLES.documents).delete().eq('id', id).select('id');
+  return Array.isArray(data) ? data.length : 0;
+}
+
 // --- appointments ---
 async function saveAppointment(_ignored, appointment) {
   const client = getClient();
@@ -1084,6 +1096,7 @@ module.exports = {
   listAppointments,
   setAppointmentStatusDb,
   setDocumentStatus,
+  deleteDocument,
   toggleShortlistDb,
   getShortlistDb,
   addInterestDb,

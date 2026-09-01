@@ -3,7 +3,7 @@ const router = express.Router();
 const path = require('path');
 const fs = require('fs');
 const { verifyTokenMiddleware } = require('../middleware/auth');
-const { createMulterForUser, uploadDocument, downloadDocument, listDocuments, signDocumentUrl, downloadSignedDocument } = require('../controllers/documentsController');
+const { createMulterForUser, uploadDocument, downloadDocument, listDocuments, signDocumentUrl, downloadSignedDocument, deleteDocument } = require('../controllers/documentsController');
 
 // wrapper to run multer per-request after verifyTokenMiddleware
 function multerMiddleware(req, res, next) {
@@ -19,6 +19,11 @@ router.post('/upload', verifyTokenMiddleware, multerMiddleware, uploadDocument);
 
 // GET /api/documents (protected) - list user's documents
 router.get('/', verifyTokenMiddleware, listDocuments);
+
+// DELETE /api/documents/:id (protected) — owner or staff can delete. Hard
+// delete: removes from in-memory store, cloud backend, and `documents` table.
+// Always audit-logged server-side (§31).
+router.delete('/:id', verifyTokenMiddleware, deleteDocument);
 
 // GET /api/documents/signed/:id?token=... — HMAC-signed short-lived access.
 // NOTE: defined before '/:id' and matching two path segments so it can never be

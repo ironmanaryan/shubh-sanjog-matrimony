@@ -18,7 +18,9 @@
     "admin:db-setup": "node scripts/admin-db-setup.js",
     "admin:seed-demo": "node scripts/admin-seed-demo.js",
     "avatar:storage-setup": "node scripts/avatar-storage-setup.js",
-    "avatar:diag": "node scripts/avatar-diag.js"
+    "avatar:diag": "node scripts/avatar-diag.js",
+    "documents:storage-setup": "node scripts/document-storage-setup.js",
+    "smoke:documents": "node scripts/documents-smoke.js"
   },
   "keywords": [],
   "author": "",

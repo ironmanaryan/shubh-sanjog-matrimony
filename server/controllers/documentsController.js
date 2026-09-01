@@ -1,5 +1,7 @@
-const fs = require('fs');
+const express = require('express');
+const router = express.Router();
 const path = require('path');
+const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const multer = require('multer');
 const { store } = require('../data/store');
@@ -7,7 +9,7 @@ const db = require('../db');
 const { signPayload, verifyPayload, DEFAULT_TTL_SECONDS } = require('../utils/signing');
 const { isStaffRole } = require('../middleware/rbac');
 const { writeAuditLog, clientIp } = require('../utils/audit');
-const { uploadToCloudinary, isCloudinaryConfigured } = require('../utils/cloudinary');
+const { uploadToCloudinary, deleteFromCloudinary, isCloudinaryConfigured } = require('../utils/cloudinary');
 const paths = require('../paths');
 
 // Privacy §31: whenever a staff member accesses a document that belongs to
@@ -70,6 +72,17 @@ async function uploadDocument(req, res) {
     if (!req.file) return res.status(400).json({ ok: false, error: 'file is required' });
     const id = uuidv4();
     const docType = (req.body && req.body.documentType) ? String(req.body.documentType) : 'other';
+
+    // Audit the upload BEFORE the network write — even a failed Cloudinary
+    // call is interesting, and a rejected file is exactly what a privacy
+    // compliance reviewer wants to see.
+    writeAuditLog({
+      actorId: req.user.id,
+      action: 'UPLOAD_DOCUMENT',
+      targetUserId: req.user.id,
+      ip: clientIp(req),
+      detail: `user uploaded ${docType}: ${req.file.originalname} (${req.file.size} bytes)`,
+    }).catch(() => {});
 
     // Upload to Cloudinary when configured (images, photos, PDFs, docs)
     let cloudinaryResult = null;
@@ -244,4 +257,92 @@ async function downloadSignedDocument(req, res) {
   }
 }
 
-module.exports = { createMulterForUser, uploadDocument, listDocuments, downloadDocument, signDocumentUrl, downloadSignedDocument, canAccessDocument };
+/**
+ * Best-effort delete of a document's backing store. Supabase Storage path or
+ * Cloudinary public id — whichever the metadata carries. Failure here is
+ * non-fatal (the database row still goes away), but we surface it so the audit
+ * trail records whatever actually happened.
+ */
+async function purgeBackingStore(meta) {
+  if (!meta) return null;
+  const tried = [];
+
+  // Cloudinary is the primary backend; the public id is what the delete call
+  // needs. Server-side credentials so we never leak through the browser.
+  if (meta.cloudinaryPublicId && isCloudinaryConfigured()) {
+    try {
+      const result = await deleteFromCloudinary(meta.cloudinaryPublicId);
+      tried.push({ backend: 'cloudinary', ok: true, result });
+    } catch (err) {
+      tried.push({ backend: 'cloudinary', ok: false, error: err.message });
+    }
+  }
+
+  // Local disk: only attempt if the metadata actually points at a file the
+  // server has access to (i.e. NOT a Cloudinary URL pasted in).
+  if (meta.path && !/^https?:\/\//.test(meta.path) && fs.existsSync(meta.path)) {
+    try {
+      await fs.promises.unlink(meta.path);
+      tried.push({ backend: 'disk', ok: true });
+    } catch (err) {
+      tried.push({ backend: 'disk', ok: false, error: err.message });
+    }
+  }
+
+  return tried.length ? tried : null;
+}
+
+/**
+ * DELETE /api/documents/:id — owner or staff hard-delete. Always audited
+ * (§31). Storage purge is best-effort; the DB row is the source of truth.
+ */
+async function deleteDocument(req, res) {
+  try {
+    const { id } = req.params;
+    const meta = store.documents.get(id);
+    if (!meta) return res.status(404).json({ ok: false, error: 'Document not found' });
+
+    const isOwner = req.user && meta.userId === req.user.id;
+    const staffOverride = req.user && isStaffRole(req.user.role);
+    if (!isOwner && !staffOverride) {
+      // Even denied attempts are interesting — log them.
+      writeAuditLog({
+        actorId: req.user?.id || null,
+        action: 'DELETE_DOCUMENT',
+        targetUserId: meta.userId,
+        ip: clientIp(req),
+        detail: `denied (not owner / not staff): tried to delete document ${id}`,
+      }).catch(() => {});
+      return res.status(403).json({ ok: false, error: 'Access denied' });
+    }
+
+    const purgeResult = await purgeBackingStore(meta);
+    const removed = store.documents.delete(id);
+    let dbRemoved = 0;
+    try {
+      dbRemoved = await db.deleteDocument(db._db, id);
+    } catch (e) {
+      console.warn('db deleteDocument failed', e);
+    }
+
+    writeAuditLog({
+      actorId: req.user.id,
+      action: 'DELETE_DOCUMENT',
+      targetUserId: meta.userId,
+      ip: clientIp(req),
+      detail: `${staffOverride && !isOwner ? 'staff' : 'owner'} deleted ${meta.documentType || 'document'} ${id} ${meta.originalName || ''}`.trim(),
+    }).catch(() => {});
+
+    return res.json({
+      ok: true,
+      removed: removed ? 1 : 0,
+      purged: purgeResult || null,
+      dbRowsRemoved: dbRemoved || 0,
+    });
+  } catch (err) {
+    console.error('deleteDocument', err);
+    return res.status(500).json({ ok: false, error: 'Server error' });
+  }
+}
+
+module.exports = { createMulterForUser, uploadDocument, listDocuments, downloadDocument, signDocumentUrl, downloadSignedDocument, deleteDocument, canAccessDocument };

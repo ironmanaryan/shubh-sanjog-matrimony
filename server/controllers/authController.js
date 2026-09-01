@@ -4,6 +4,7 @@ const { signToken } = require('../middleware/auth');
 const { matchesAdminIdentifier } = require('../middleware/rbac');
 const otpService = require('../utils/otp');
 const { isProduction } = require('../secrets');
+const { writeAuditLog, clientIp } = require('../utils/audit');
 
 // Supabase Auth — when configured, users are also synced to Supabase Auth.
 // Resolved lazily: at module-load time the env may not be populated yet, and a
@@ -69,6 +70,17 @@ async function resolveUserFromSupabaseIdentity(authUser) {
   } catch (e) {
     console.warn('db create user failed during session exchange', e && e.message ? e.message : e);
   }
+
+  // New registrations are surfaced on the admin live-activity feed.
+  // Fire-and-forget — a write failure must never break sign-in.
+  writeAuditLog({
+    actorId: user.id,
+    action: 'REGISTER_USER',
+    targetUserId: user.id,
+    ip: '',
+    detail: `signed in via Supabase — ${user.email || user.identifier || user.id}`,
+  }).catch(() => {});
+
   return user;
 }
 

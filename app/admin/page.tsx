@@ -5,6 +5,7 @@ import { API } from '@/lib/api-base';
 import Image from 'next/image';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Activity,
   BarChart3,
   CheckCircle2,
   CreditCard,
@@ -21,6 +22,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import AdminSignInGate from '@/components/admin/AdminSignInGate';
+import LiveActivityPanel from '@/components/admin/LiveActivityPanel';
 import { clearSession, getSession, isNetworkError } from '@/lib/auth-client';
 
 
@@ -28,7 +30,7 @@ import { clearSession, getSession, isNetworkError } from '@/lib/auth-client';
 // tabs — Profile Review, Document Verification, UPI Payment Approvals, Matching
 // Management, Reports & Analytics, plus an ADMIN-only Audit Log viewer (§31).
 // RBAC (§29) hides/restricts tabs per role.
-type TabKey = 'overview' | 'profiles' | 'documents' | 'payments' | 'matchmaking' | 'analytics' | 'audit';
+type TabKey = 'overview' | 'profiles' | 'documents' | 'payments' | 'matchmaking' | 'analytics' | 'audit' | 'activity';
 
 type Role = string;
 
@@ -78,6 +80,7 @@ const ASSIGNABLE_ROLES = ['admin', 'relationship_manager', 'staff', 'customer'];
 
 const ALL_TABS: { key: TabKey; label: string; icon: typeof LayoutDashboard }[] = [
   { key: 'overview', label: 'Overview', icon: LayoutDashboard },
+  { key: 'activity', label: 'Live Activity', icon: Activity },
   { key: 'profiles', label: 'Profile Review', icon: FileText },
   { key: 'documents', label: 'Document Verification', icon: ShieldCheck },
   { key: 'payments', label: 'UPI Payment Approvals', icon: CreditCard },
@@ -908,6 +911,11 @@ export default function AdminPage() {
         )}
 
         {message && <div className="mb-5 rounded-2xl border border-[#f2d8a8] bg-[#fffaf3] p-3 text-sm text-[#5a3743]">{message}</div>}
+
+        {/* ---------------- Live Activity & Document Verification ---------------- */}
+        {tab === 'activity' && (
+          <LiveActivityPanel />
+        )}
 
         {/* ---------------- Overview ---------------- */}
         {tab === 'overview' && (

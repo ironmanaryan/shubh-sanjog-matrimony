@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation';
 import { Bell, BriefcaseBusiness, CheckCheck, ChevronRight, Circle, CircleCheckBig, CreditCard, FileText, GraduationCap, Heart, Home, MessageSquare, ShieldCheck, Sparkles, User, UserRound, Users, Wallet } from 'lucide-react';
 import PrivacySettings from '../../components/customer/PrivacySettings';
 import RequestMeetingButton from '@/components/customer/RequestMeetingButton';
+import DocumentBadges from '@/components/customer/DocumentBadges';
 import { compatibilityBadgeClass } from '@/lib/compatibility';
 import { buildMeetingRequestMessage } from '@/lib/whatsapp';
 import { API, requestJson } from '@/lib/api-client';
@@ -120,6 +121,11 @@ type ProfileData = {
 type Appointment = { id?: string; date: string; time: string; type?: string; notes?: string; status?: string };
 
 type DocumentItem = { id: string; status?: string; documentType?: string | null; originalName?: string };
+
+// Shape that DocumentBadges accepts; looser than DocumentItem so the badge
+// component can be reused on a public profile too without pulling in the full
+// customer dashboard type graph.
+type DocumentLike = { documentType?: string | null | undefined; status?: string | null | undefined };
 
 type NotificationItem = { id: string; type: string; at: number; payload?: string };
 
@@ -574,6 +580,23 @@ export default function CustomerDashboardPage() {
         /* localStorage unavailable (private mode) — non-fatal */
       }
 
+      // Tell the server's audit log about the photo change so the admin live
+      // activity feed reflects it (the Supabase upload itself does not hit the
+      // Express API; without this self-report the admin's "Activity" tab
+      // would never show photo updates).
+      try {
+        await fetch(`${API}/customer/activity-log`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(authHeaders() || {}) },
+          body: JSON.stringify({
+            action: 'PROFILE_PHOTO_CHANGE',
+            detail: `compressed ${formatBytes(compressed.originalSize)} → ${formatBytes(compressed.compressedSize)}`,
+          }),
+        });
+      } catch {
+        /* activity log is best-effort */
+      }
+
       setStatusMessage(
         `Profile photo updated — ${formatBytes(compressed.originalSize)} compressed to ${formatBytes(
           compressed.compressedSize
@@ -995,6 +1018,12 @@ export default function CustomerDashboardPage() {
                         : 'Edit Photo'}
                     </button>
                     <Link href="/register/fill-details?step=1" className="mt-1 text-[11px] text-[#6a4a57] underline hover:text-[#7b102d]">Edit details</Link>
+                    {/* Verified-document badges: ID, Income, Kundli, etc. Each
+                        reflects the user's actual review status — Approved
+                        (green), Pending (amber), Rejected (rose). */}
+                    <div className="mt-3 flex justify-center">
+                      <DocumentBadges documents={documents as DocumentLike[]} dense />
+                    </div>
                   </div>
                 </div>
 

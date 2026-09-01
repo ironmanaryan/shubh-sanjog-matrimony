@@ -895,7 +895,7 @@ router.post('/inquiries/status', verifyTokenMiddleware, requirePermission('revie
 // ADMIN role ONLY (not RM/staff): every administrative access to or change of
 // user sensitive data is listed here. Supports action / target-user / date
 // range filters. Falls back to the in-memory trail when SQLite is unavailable.
-const AUDIT_ACTIONS = ['VIEW_DOCUMENT', 'VIEW_PROFILE', 'UPDATE_STATUS', 'DELETE_ACCOUNT', 'CHANGE_ROLE', 'ADD_NOTE', 'MANAGE_MATCH'];
+const AUDIT_ACTIONS = ['VIEW_DOCUMENT', 'VIEW_PROFILE', 'UPDATE_STATUS', 'DELETE_ACCOUNT', 'CHANGE_ROLE', 'ADD_NOTE', 'MANAGE_MATCH', 'UPLOAD_DOCUMENT', 'DELETE_DOCUMENT', 'REGISTER_USER', 'PROFILE_PHOTO_CHANGE', 'PROFILE_PHOTO_REMOVE', 'PROFILE_UPDATE'];
 
 router.get('/audit-logs', verifyTokenMiddleware, requireAdmin, async (req, res) => {
   try {
@@ -930,6 +930,69 @@ router.get('/audit-logs', verifyTokenMiddleware, requireAdmin, async (req, res) 
     return res.json({ ok: true, logs, actions });
   } catch (err) {
     console.error('audit-logs error', err);
+    return res.status(500).json({ ok: false, error: 'Server error' });
+  }
+});
+
+/**
+ * GET /api/admin/activity-stream
+ *
+ * Live feed for the admin "Activity Logs & Document Verification" dashboard
+ * tab. Returns the most recent activity of interest — registrations,
+ * document uploads/deletes, photo changes — plus live counters for the past
+ * 24 hours, so an admin landing on the tab gets situational awareness in a
+ * single round trip (no need to also fetch /admin/stats).
+ *
+ * Lightweight: we filter the in-memory audit trail first, fall back to the DB
+ * for entries written by other replicas or older than the in-memory window.
+ */
+router.get('/activity-stream', verifyTokenMiddleware, requireStaffRole, async (req, res) => {
+  try {
+    const ACTIVITY_ACTIONS = new Set([
+      'REGISTER_USER',
+      'UPLOAD_DOCUMENT',
+      'DELETE_DOCUMENT',
+      'PROFILE_PHOTO_CHANGE',
+      'PROFILE_PHOTO_REMOVE',
+      'PROFILE_UPDATE',
+      'UPDATE_STATUS', // covers profile + document + payment approvals
+    ]);
+    const SINCE_MS = 24 * 60 * 60 * 1000;
+    const sinceCutoff = Date.now() - SINCE_MS;
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+
+    let inMemory = store.auditLogs
+      .filter((e) => ACTIVITY_ACTIONS.has(e.action))
+      .filter((e) => Number(e.createdAt) >= sinceCutoff)
+      .slice(-limit)
+      .reverse();
+
+    // Distinct action counts for the badge "X events in last 24 h".
+    const counters = { total: inMemory.length };
+    for (const e of inMemory) counters[e.action] = (counters[e.action] || 0) + 1;
+
+    // Most recent upload/registration/photo change per user — handy on a
+    // populated dashboard that needs to show "X happened 3 minutes ago".
+    const perUser = {};
+    for (const e of inMemory) {
+      if (!e.targetUserId) continue;
+      if (perUser[e.targetUserId]) continue;
+      perUser[e.targetUserId] = {
+        action: e.action,
+        detail: e.detail,
+        createdAt: e.createdAt,
+      };
+    }
+
+    return res.json({
+      ok: true,
+      sinceMs: sinceCutoff,
+      events: inMemory,
+      counters,
+      perUser,
+    });
+  } catch (err) {
+    console.error('activity-stream error', err);
     return res.status(500).json({ ok: false, error: 'Server error' });
   }
 });

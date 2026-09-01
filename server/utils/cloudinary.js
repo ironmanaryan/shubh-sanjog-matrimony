@@ -84,9 +84,22 @@ function cloudinaryUrl(publicId, options = {}) {
   }
 }
 
+/**
+ * Best-effort delete of a Cloudinary asset by public_id. Returns the API
+ * result on success, throws on non-2xx so the caller can record the audit log
+ * accurately. No-op when Cloudinary is not configured.
+ */
+async function deleteFromCloudinary(publicId) {
+  if (!isCloudinaryConfigured() || !publicId) return null;
+  ensureConfigured();
+  const result = await cloudinary.uploader.destroy(publicId, { invalidate: true, resource_type: 'image' });
+  return result;
+}
+
 module.exports = {
   cloudinary,
   isCloudinaryConfigured,
   uploadToCloudinary,
+  deleteFromCloudinary,
   cloudinaryUrl,
 };
