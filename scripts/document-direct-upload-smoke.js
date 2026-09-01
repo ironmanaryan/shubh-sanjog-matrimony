@@ -52,6 +52,13 @@ async function main() {
   const { data: preExisting } = await admin.from('users').select('id').eq('id', userId).maybeSingle();
   step('users row is initially absent (the production bug)', !preExisting);
 
+  // `profiles` is optional — the schema has it via `profiles_migration.sql`,
+  // but a fresh project might not. Probe its existence first so the smoke
+  // doesn't have to die on "relation does not exist".
+  const { data: profilesProbe, error: profilesProbeErr } = await admin
+    .from('profiles').select('id').eq('id', userId).maybeSingle();
+  const profilesTablePresent = !profilesProbeErr || !/does not exist/i.test(profilesProbeErr.message || '');
+
   const signIn = await userClient.auth.signInWithPassword({ email, password });
   if (signIn.error) throw new Error('sign in failed: ' + signIn.error.message);
   console.log(`User ${userId.slice(0, 8)}… signed in.\n`);
@@ -100,6 +107,27 @@ async function main() {
       .upsert(upsertPayload, { onConflict: 'id', ignoreDuplicates: false });
     step('lazy upsert into public.users succeeded', !upsertErr, upsertErr ? upsertErr.message : `id=${upsertPayload.id}`);
 
+    // Best-effort: also upsert into `profiles` if the table exists. Some
+    // schemas (legacy / brand-new deploys) have only one of the two tables,
+    // and the FK on documents.user_id may point at either. The production
+    // helper does both via `Promise.all`; this smoke mirrors that.
+    if (profilesTablePresent) {
+      const profilesPayload = {
+        id: authedUser.id,
+        user_id: authedUser.id,
+        email: authedUser.email || null,
+        full_name: (typeof meta.full_name === 'string' && meta.full_name) || (typeof meta.name === 'string' && meta.name) || (authedUser.email ? authedUser.email.split('@')[0] : ''),
+        created_at: new Date().toISOString(),
+      };
+      const { error: profilesErr } = await userClient
+        .from('profiles')
+        .upsert(profilesPayload, { onConflict: 'id', ignoreDuplicates: false });
+      step('lazy upsert into public.profiles succeeded (or row already existed)',
+        !profilesErr, profilesErr ? profilesErr.message : `id=${profilesPayload.id}`);
+    } else {
+      console.log('SKIP  profiles table absent on this project (legacy / not yet migrated)');
+    }
+
     // 4. Now that users(id) is populated, the documents INSERT must
     //    succeed without FK violation.
     const id = `smoke-${userId}-${Date.now()}`;
@@ -145,6 +173,9 @@ async function main() {
     console.log('\nDone - direct upload + lazy users upsert operational.');
   } finally {
     try { await admin.from('users').delete().eq('id', userId); } catch {}
+    if (profilesTablePresent) {
+      try { await admin.from('profiles').delete().eq('id', userId); } catch {}
+    }
     try { await admin.auth.admin.deleteUser(userId); } catch {}
   }
 }

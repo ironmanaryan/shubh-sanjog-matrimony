@@ -190,7 +190,8 @@ export async function uploadDocumentDirect(
 type SupabaseClient = ReturnType<typeof getSupabase>;
 
 /**
- * Upsert the `users` row for a freshly authenticated browser session.
+ * Upsert the `users` row (and the parallel `profiles` row if it exists) for a
+ * freshly authenticated browser session.
  *
  * The historical Express auth flow writes to `public.users` via
  * `db.createUser()` inside `resolveUserFromSupabaseIdentity`. A user who
@@ -202,39 +203,34 @@ type SupabaseClient = ReturnType<typeof getSupabase>;
  *   "insert or update on table 'documents' violates foreign key constraint
  *    'documents_user_id_fkey'"
  *
- * The `id` column on `public.users` IS the Supabase auth uid, so the
- * upsert is idempotent — running it on every upload is safe. We only set
- * fields that are missing so we never overwrite admin-side edits (role,
- * deleted_at, etc.).
+ * The `id` column on `public.users` (and `public.profiles`, if it exists)
+ * IS the Supabase auth uid, so the upsert is idempotent — running it on
+ * every upload is safe. We only set fields that are missing so we never
+ * overwrite admin-side edits (role, deleted_at, etc.).
+ *
+ * We attempt BOTH tables in case the live schema's FK has been re-targeted
+ * at `profiles(id)` (some Supabase projects use profiles as the primary
+ * table; some use users). Either path satisfies the FK on
+ * `documents.user_id` because both tables share the same `id` (= Supabase
+ * auth uid) PK layout.
  */
 async function ensureUserRow(
   supabase: NonNullable<SupabaseClient>,
   user: { id: string; email?: string | null; user_metadata?: Record<string, unknown> | null }
 ): Promise<void> {
-  const { data: existing, error: readErr } = await supabase
-    .from('users')
-    .select('id')
-    .eq('id', user.id)
-    .maybeSingle();
-  if (readErr) {
-    // If SELECT itself is blocked, we still attempt the upsert below —
-    // it will surface the underlying error message to the caller.
-    // (Logging here is silent; UI surfaces the toast.)
-  }
-  if (existing?.id) return;
-
   const metadata = (user.user_metadata || {}) as Record<string, unknown>;
   const fullName =
     (typeof metadata.full_name === 'string' && metadata.full_name.trim()) ||
     (typeof metadata.name === 'string' && metadata.name.trim()) ||
     (user.email ? user.email.split('@')[0] : '');
 
-  // `identifier` is the legacy unique column. We set it to the same string
-  // as `id` for browser-side sign-ups so the unique constraint holds even
-  // if the user later goes through the Express flow (which would issue a
-  // different identifier). PostgreSQL unique indexes do NOT collide when the
-  // value is the same as `id`, because `id` itself is text PK.
-  const upsertPayload = {
+  // `identifier` is the legacy unique column on `public.users`. We set it
+  // to the same string as `id` for browser-side sign-ups so the unique
+  // constraint holds even if the user later goes through the Express flow
+  // (which would issue a different identifier). PostgreSQL unique indexes
+  // do NOT collide when the value is the same as `id`, because `id` itself
+  // is text PK.
+  const usersPayload = {
     id: user.id,
     identifier: user.id,
     email: user.email || null,
@@ -243,16 +239,75 @@ async function ensureUserRow(
     created_at: Date.now(),
   };
 
-  const { error: upsertErr } = await supabase
-    .from('users')
-    .upsert(upsertPayload, { onConflict: 'id', ignoreDuplicates: false });
+  // `profiles` (separate table created in `supabase/profiles_migration.sql`)
+  // has its own `id` PK and a mirroring `user_id` column. We only set rows on
+  // insert — never overwrite admin-side edits to `is_completed`, `dob`,
+  // etc. — because customers fill out their profile via the post-OAuth form
+  // and we don't want a re-upload to clobber the work.
+  const profilesPayload = {
+    id: user.id,
+    user_id: user.id,
+    email: user.email || null,
+    full_name: fullName || null,
+    created_at: new Date().toISOString(),
+  };
 
-  if (upsertErr && !/duplicate key/i.test(upsertErr.message || '')) {
-    // Surface a non-fatal warning — the document upload itself might still
-    // succeed if a previous attempt already populated the row through
-    // another path. The downstream INSERT will reveal the truth.
-    console.warn('[documents] users upsert failed:', upsertErr.message);
+  // Run both upserts. The duplicates are tolerated silently; if a column
+  // is missing we ignore the error so we don't break older schemas that
+  // haven't been migrated yet.
+  await Promise.all([
+    safeUpsert(supabase, 'users', usersPayload, 'id'),
+    safeUpsert(supabase, 'profiles', profilesPayload, 'id'),
+  ]);
+}
+
+/**
+ * Wraps `supabase.from(table).upsert(payload, { onConflict })` so callers
+ * can tolerate both "no such table" and "no such column" errors without
+ * having to embed the same regex inspection everywhere. Returns true when
+ * the row was actually written (or already existed); false when the table
+ * itself is absent or the column set is incompatible.
+ */
+async function safeUpsert(
+  supabase: NonNullable<SupabaseClient>,
+  table: 'users' | 'profiles',
+  payload: Record<string, unknown>,
+  conflictTarget: string
+): Promise<boolean> {
+  // 1. SELECT first — if a row already exists with the PK, the upsert is
+  // a no-op for THIS upload but we still avoid the INSERT path entirely
+  // (saves a round trip and lets us tolerate strict-mode legacy columns).
+  const { data: existing, error: readErr } = await supabase
+    .from(table)
+    .select('id')
+    .eq('id', payload.id as string)
+    .maybeSingle();
+  // `readErr` is non-null in two practical cases: the table doesn't exist
+  // (42P01) or a referenced column/relation is missing. Both are tolerated.
+  if (readErr) return false;
+  if (existing?.id) return true;
+
+  const { error: upsertErr } = await supabase
+    .from(table)
+    .upsert(payload, { onConflict: conflictTarget, ignoreDuplicates: false });
+
+  if (upsertErr) {
+    // Duplicate key = a parallel request raced us into the row; that's
+    // a quiet win. "table not found" / "column not found" / schema-cache
+    // races = not a fatal error for the upload itself. The downstream
+    // INSERT will surface a real failure when the row actually never
+    // lands. We log only the unexpected cases so a regression is debuggable.
+    const msg = upsertErr.message || '';
+    if (!/duplicate key/i.test(msg)) {
+      // Use console.warn rather than throw — if the FK is genuinely
+      // satisfied by the OTHER table (e.g. documents.user_id actually
+      // references `profiles(id)`), this is a non-event. The downstream
+      // INSERT is the source of truth.
+      console.warn(`[documents] ${table} upsert skipped:`, msg);
+    }
+    return false;
   }
+  return true;
 }
 
 /**
