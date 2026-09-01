@@ -69,7 +69,12 @@ function createMulterForUser(userId) {
 // All image/photo/PDF/document uploads are routed through Cloudinary when configured.
 async function uploadDocument(req, res) {
   try {
-    if (!req.file) return res.status(400).json({ ok: false, error: 'file is required' });
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        error: 'No file was attached to the request. Pick a JPG, PNG, WEBP or PDF under 5 MB and try again.',
+      });
+    }
     const id = uuidv4();
     const docType = (req.body && req.body.documentType) ? String(req.body.documentType) : 'other';
 
@@ -114,11 +119,28 @@ async function uploadDocument(req, res) {
       if (db._db) await db.saveDocument(db._db, meta);
     } catch (e) {
       console.warn('db save document failed', e);
+      // Storage write succeeded but DB write failed — surface as a structured
+      // 500 with a specific message, so the front-end can show a retry hint
+      // instead of treating this as a generic failure.
+      return res.status(500).json({
+        success: false,
+        error: 'Document uploaded to storage but database save failed. Please retry.',
+      });
     }
-    return res.json({ ok: true, file: meta });
+
+    // Success — return both shapes (legacy + new) for client compatibility.
+    return res.json({
+      success: true,
+      ok: true,
+      file: meta,
+      record: meta,
+    });
   } catch (err) {
     console.error('uploadDocument', err);
-    return res.status(500).json({ ok: false, error: 'Server error' });
+    return res.status(500).json({
+      success: false,
+      error: (err && err.message) ? err.message : 'Server error',
+    });
   }
 }
 
@@ -129,10 +151,13 @@ async function listDocuments(req, res) {
     for (const [id, meta] of store.documents.entries()) {
       if (meta.userId === userId) docs.push(meta);
     }
-    return res.json({ ok: true, documents: docs });
+    return res.json({ success: true, ok: true, documents: docs });
   } catch (err) {
     console.error('listDocuments', err);
-    return res.status(500).json({ ok: false, error: 'Server error' });
+    return res.status(500).json({
+      success: false,
+      error: (err && err.message) ? err.message : 'Server error',
+    });
   }
 }
 
@@ -158,15 +183,20 @@ async function downloadDocument(req, res) {
   try {
     const { id } = req.params;
     const meta = store.documents.get(id);
-    if (!meta) return res.status(404).json({ ok: false, error: 'File not found' });
+    if (!meta) {
+      return res.status(404).json({ success: false, error: 'File not found' });
+    }
     if (!canAccessDocument(req.user, meta)) {
-      return res.status(403).json({ ok: false, error: 'Access denied' });
+      return res.status(403).json({ success: false, error: 'Access denied' });
     }
     auditStaffDocumentView(req, meta, `GET /api/documents/${id}`);
     streamDocument(meta, res);
   } catch (err) {
     console.error('downloadDocument', err);
-    return res.status(500).json({ ok: false, error: 'Server error' });
+    return res.status(500).json({
+      success: false,
+      error: (err && err.message) ? err.message : 'Server error',
+    });
   }
 }
 
@@ -201,9 +231,11 @@ async function signDocumentUrl(req, res) {
   try {
     const { id } = req.params;
     const meta = store.documents.get(id);
-    if (!meta) return res.status(404).json({ ok: false, error: 'File not found' });
+    if (!meta) {
+      return res.status(404).json({ success: false, error: 'File not found' });
+    }
     if (!canAccessDocument(req.user, meta)) {
-      return res.status(403).json({ ok: false, error: 'Access denied' });
+      return res.status(403).json({ success: false, error: 'Access denied' });
     }
     auditStaffDocumentView(req, meta, 'GET /api/documents/:id/sign');
 
@@ -212,6 +244,7 @@ async function signDocumentUrl(req, res) {
     // Absolute URL so it can be used directly in <img src> / browser downloads.
     const base = `${req.protocol}://${req.get('host')}`;
     return res.json({
+      success: true,
       ok: true,
       url: `${base}/api/documents/signed/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`,
       path: `/api/documents/signed/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`,
@@ -219,7 +252,10 @@ async function signDocumentUrl(req, res) {
     });
   } catch (err) {
     console.error('signDocumentUrl', err);
-    return res.status(500).json({ ok: false, error: 'Server error' });
+    return res.status(500).json({
+      success: false,
+      error: (err && err.message) ? err.message : 'Server error',
+    });
   }
 }
 
@@ -230,16 +266,18 @@ async function downloadSignedDocument(req, res) {
     const { id } = req.params;
     const payload = verifyPayload(String(req.query.token || ''));
     if (!payload || payload.purpose !== 'document-download' || payload.docId !== id) {
-      return res.status(403).json({ ok: false, error: 'Invalid or expired signature' });
+      return res.status(403).json({ success: false, error: 'Invalid or expired signature' });
     }
     const meta = store.documents.get(id);
-    if (!meta) return res.status(404).json({ ok: false, error: 'File not found' });
+    if (!meta) {
+      return res.status(404).json({ success: false, error: 'File not found' });
+    }
 
     // Signed URLs are only ever minted after an authorization check for this
     // grantee — re-verify defensively so a stale grant cannot outlive a revoke.
     const grantee = store.users.get(payload.userId);
     if (grantee && !canAccessDocument(grantee, meta)) {
-      return res.status(403).json({ ok: false, error: 'Access revoked' });
+      return res.status(403).json({ success: false, error: 'Access revoked' });
     }
     if (grantee && meta.userId !== grantee.id && isStaffRole(grantee.role)) {
       writeAuditLog({
@@ -253,7 +291,10 @@ async function downloadSignedDocument(req, res) {
     streamDocument(meta, res);
   } catch (err) {
     console.error('downloadSignedDocument', err);
-    return res.status(500).json({ ok: false, error: 'Server error' });
+    return res.status(500).json({
+      success: false,
+      error: (err && err.message) ? err.message : 'Server error',
+    });
   }
 }
 
@@ -300,7 +341,9 @@ async function deleteDocument(req, res) {
   try {
     const { id } = req.params;
     const meta = store.documents.get(id);
-    if (!meta) return res.status(404).json({ ok: false, error: 'Document not found' });
+    if (!meta) {
+      return res.status(404).json({ success: false, error: 'Document not found.' });
+    }
 
     const isOwner = req.user && meta.userId === req.user.id;
     const staffOverride = req.user && isStaffRole(req.user.role);
@@ -313,7 +356,7 @@ async function deleteDocument(req, res) {
         ip: clientIp(req),
         detail: `denied (not owner / not staff): tried to delete document ${id}`,
       }).catch(() => {});
-      return res.status(403).json({ ok: false, error: 'Access denied' });
+      return res.status(403).json({ success: false, error: 'You can only delete your own documents.' });
     }
 
     const purgeResult = await purgeBackingStore(meta);
@@ -334,6 +377,7 @@ async function deleteDocument(req, res) {
     }).catch(() => {});
 
     return res.json({
+      success: true,
       ok: true,
       removed: removed ? 1 : 0,
       purged: purgeResult || null,
@@ -341,7 +385,10 @@ async function deleteDocument(req, res) {
     });
   } catch (err) {
     console.error('deleteDocument', err);
-    return res.status(500).json({ ok: false, error: 'Server error' });
+    return res.status(500).json({
+      success: false,
+      error: (err && err.message) ? err.message : 'Server error',
+    });
   }
 }
 

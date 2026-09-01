@@ -5,12 +5,40 @@ const fs = require('fs');
 const { verifyTokenMiddleware } = require('../middleware/auth');
 const { createMulterForUser, uploadDocument, downloadDocument, listDocuments, signDocumentUrl, downloadSignedDocument, deleteDocument } = require('../controllers/documentsController');
 
-// wrapper to run multer per-request after verifyTokenMiddleware
+/**
+ * Multer wrapper that converts the library's Error objects into structured
+ * JSON instead of letting them fall through to Express's default HTML
+ * error page. The raw `next(err)` path used to be the source of the
+ * "<title>Error</title> <pre>Internal Server Error</pre>" alert the
+ * customer saw.
+ *
+ * Maps the most common rejection reasons to friendly messages:
+ *   LIMIT_FILE_SIZE  → 413 "File too large"
+ *   Unsupported mime → 415 "Unsupported file type"
+ *   Anything else    → 400 with the underlying message
+ */
 function multerMiddleware(req, res, next) {
   const upload = createMulterForUser(req.user.id).single('file');
   upload(req, res, function (err) {
-    if (err) return next(err);
-    next();
+    if (!err) return next();
+    let status = 400;
+    let message = err.message || 'Upload rejected';
+
+    if (err.code === 'LIMIT_FILE_SIZE' || /file too large/i.test(message)) {
+      status = 413;
+      message = 'File too large — please keep documents under the 5 MB limit.';
+    } else if (/unsupported file type/i.test(message)) {
+      status = 415;
+      message = 'Unsupported file type. Upload a JPG, PNG, WEBP or PDF.';
+    } else if (err.name === 'MulterError') {
+      // other multer errors (LIMIT_PART_COUNT, LIMIT_UNEXPECTED_FILE, ...)
+      message = `Upload rejected (${err.code || err.name}).`;
+    }
+
+    if (!res.headersSent) {
+      return res.status(status).json({ success: false, error: message });
+    }
+    next(err);
   });
 }
 

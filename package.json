@@ -20,7 +20,8 @@
     "avatar:storage-setup": "node scripts/avatar-storage-setup.js",
     "avatar:diag": "node scripts/avatar-diag.js",
     "documents:storage-setup": "node scripts/document-storage-setup.js",
-    "smoke:documents": "node scripts/documents-smoke.js"
+    "smoke:documents": "node scripts/documents-smoke.js",
+    "smoke:documents-negative": "node scripts/documents-smoke-negative.js"
   },
   "keywords": [],
   "author": "",

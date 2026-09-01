@@ -96,6 +96,20 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
     setItems(docs);
   };
 
+  /**
+   * Toast helper — used for upload status instead of `alert()` so the user
+   * can keep reading the page. `alert()` was the source of the broken-HTML
+   * dialog in the previous bug report: the upload route used to return HTML
+   * on failure and `alert(err.message)` pasted the markup straight into a
+   * modal. The error path now returns JSON; the toast here keeps that
+   * promise and lets you still dismiss with a click.
+   */
+  const [toast, setToast] = useState<{ kind: 'success' | 'error' | 'info'; message: string } | null>(null);
+  function showToast(kind: 'success' | 'error' | 'info', message: string) {
+    setToast({ kind, message });
+    setTimeout(() => setToast((cur) => (cur && cur.message === message ? null : cur)), 4500);
+  }
+
   useEffect(() => {
     void refresh();
     // re-fetch when the tab regains focus so the list stays accurate after
@@ -108,12 +122,13 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
   /**
    * Pick a file, compress in the browser, then upload. We never feed the raw
    * picked bytes to the server — `uploadCompressedDocument` always passes
-   * the post-compression payload.
+   * the post-compression payload, and the API client falls back to direct
+   * Supabase Storage when the Express route 5xxs.
    */
   async function handleUpload() {
     const file = fileRef.current?.files?.[0];
     if (!file) {
-      alert('Choose a file first.');
+      showToast('info', 'Choose a file first.');
       return;
     }
     setUploading(true);
@@ -121,7 +136,7 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
     setPhaseMessage(`Compressing ${file.name} (${formatBytes(file.size)})…`);
 
     try {
-      const { record, compressed } = await uploadCompressedDocument(file, docType, {
+      const { record, compressed, usedFallback } = await uploadCompressedDocument(file, docType, {
         onProgress: (pct) => {
           setUploadProgress(Math.min(80, Math.round(pct * 0.8))); // 0-80% reserved for compression
           if (pct < 30) setPhaseMessage(`Reading source (${formatBytes(file.size)})…`);
@@ -129,12 +144,16 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
           else setPhaseMessage('Uploading…');
         },
       });
-      setUploadProgress(85);
+      setUploadProgress(95);
       setPhaseMessage(`Uploaded ${record.name} (${formatBytes(compressed.compressedSize)})`);
 
       // Optimistic UI: prepend the new record. The next focus/refresh will
       // reconcile any divergence.
       setItems((prev) => [record, ...prev.filter((p) => p.id !== record.id)]);
+
+      // Force a list refresh from the server so the toast below is based on
+      // the canonical row (id, status, file_url) — not our optimistic copy.
+      void refresh();
 
       // Brief settle, then poll the server once in case anyone else touched
       // this user's docs concurrently.
@@ -145,10 +164,20 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
       }, 3000);
 
       if (fileRef.current) fileRef.current.value = '';
+      showToast(
+        'success',
+        usedFallback
+          ? `Saved via direct upload (server route unreachable). ${record.name}.`
+          : `${record.name} uploaded — pending review.`
+      );
     } catch (err: any) {
       console.error('document upload failed', err);
-      alert(err?.message || 'Upload failed');
-      setPhaseMessage(err?.message || 'Upload failed');
+      const message =
+        (err?.message && !/<!DOCTYPE|<\/?html|<pre/i.test(err.message))
+          ? err.message
+          : 'Upload failed. Please try again or pick a different file.';
+      setPhaseMessage(message);
+      showToast('error', message);
     } finally {
       setUploading(false);
     }
@@ -166,8 +195,12 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
     setDeletingId(null);
     if (ok) {
       setItems((prev) => prev.filter((p) => p.id !== id));
+      // Reconcile with the server so the row we just removed doesn't come
+      // back via the next focus/refresh.
+      void refresh();
+      showToast('success', `${found.name} deleted.`);
     } else {
-      alert('Could not delete this document. Please try again.');
+      showToast('error', 'Could not delete this document. Please try again.');
     }
   }
 
@@ -189,6 +222,25 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
+      {/* Non-modal status toast. Replaces `alert()` so a server HTML response
+          can never bubble up as a modal dialog again. */}
+      {toast && (
+        <div
+          role="status"
+          aria-live="polite"
+          onClick={() => setToast(null)}
+          className={`fixed inset-x-0 top-4 z-50 mx-auto flex max-w-md cursor-pointer items-center gap-2 rounded-full border px-4 py-2 text-sm font-bold shadow-lg ${
+            toast.kind === 'success'
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+              : toast.kind === 'error'
+                ? 'border-rose-200 bg-rose-50 text-rose-800'
+                : 'border-amber-200 bg-amber-50 text-amber-800'
+          }`}
+        >
+          {toast.kind === 'success' ? <CheckCircle2 size={14} /> : toast.kind === 'error' ? <XCircle size={14} /> : <ShieldCheck size={14} />}
+          <span className="truncate">{toast.message}</span>
+        </div>
+      )}
       {/* ── Upload box ──────────────────────────────────────────────────────── */}
       <section className="rounded-2xl border border-[#f2d9a8] bg-white p-6 shadow-sm">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">

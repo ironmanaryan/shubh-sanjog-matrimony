@@ -4,6 +4,7 @@
 // avatars. Browser-only: import from a Client Component.
 
 import { compressDocument, formatBytes, type CompressedDocument } from '@/lib/image-compress';
+import { getSupabase } from '@/lib/supabase';
 
 export type DocumentType =
   | 'identity'
@@ -23,25 +24,165 @@ export type CustomerDocument = {
   rejectionReason?: string | null;
   size?: number;
   mimetype?: string;
+  /**
+   * `server` came back from the Express `/api/documents/upload` route;
+   * `direct` came from the client→Supabase Storage fallback path used when
+   * the server is unreachable. Helps the UI tag the source honestly.
+   */
+  source?: 'server' | 'direct';
 };
 
 /**
- * Compresses a picked file to the brief's 4-20 KB band and uploads it. Returns
- * the persisted record plus a friendly status string. The caller can listen
- * to progress via the options.onProgress.
+ * Parse the body of a fetch response safely. Returns a structured error with
+ * the server message when one is present, or a generic "Upload failed"
+ * otherwise. The previous implementation aliased the raw HTML body to
+ * `err.message`, which the alert() then bubbled to the user verbatim —
+ * literally the page shown in the screenshot.
+ */
+async function readJsonError(res: Response, fallbackMessage: string): Promise<{ ok: true; json: any } | { ok: false; error: string }> {
+  const text = await res.text();
+  if (!text) {
+    return { ok: false, error: res.ok ? fallbackMessage : `Request failed (${res.status})` };
+  }
+
+  // Sniff content-type — if the server shipped HTML, surface a generic
+  // message rather than dumping the markup.
+  const ctype = res.headers.get('content-type') || '';
+  if (!ctype.includes('json') && !ctype.includes('text/plain')) {
+    return {
+      ok: false,
+      error: res.ok
+        ? fallbackMessage
+        : `Server returned ${res.status} but the body wasn't JSON — falling back to direct upload.`,
+    };
+  }
+
+  let json: any = null;
+  try { json = JSON.parse(text); } catch {
+    return { ok: false, error: `Could not parse server response (${res.status})` };
+  }
+  if (res.ok && (json?.success || json?.ok)) return { ok: true, json };
+  return { ok: false, error: json?.error || json?.message || `Request failed (${res.status})` };
+}
+
+/**
+ * Direct client → Supabase Storage fallback. Used when the Express upload
+ * route returns 5xx, network-fails, or otherwise appears down. The object is
+ * written under `<authUserId>/<timestamp>.<ext>` so the RLS policy
+ * `(foldername(name))[1] = auth.uid()` allows it; a row is then inserted
+ * directly into the `documents` table.
+ *
+ * Returns the same `CustomerDocument` shape as the server path so the
+ * front-end doesn't need to branch.
+ */
+export async function uploadDocumentDirect(
+  file: File,
+  documentType: DocumentType,
+  options: { onProgress?: (percent: number) => void } = {}
+): Promise<{ record: CustomerDocument; compressed: CompressedDocument }> {
+  const supabase = getSupabase();
+  if (!supabase) throw new Error('Supabase is not configured — direct upload unavailable.');
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Sign in before uploading.');
+
+  const compressed = await compressDocument(file, { onProgress: options.onProgress });
+
+  // Build the upload payload — bytes + filename + mimetype.
+  const uploadPayload =
+    compressed.file instanceof File
+      ? compressed.file
+      : new File([compressed.file], compressed.fileName, { type: compressed.mimeType });
+
+  const ext = (compressed.fileName.split('.').pop() || 'bin').toLowerCase();
+  const objectPath = `${user.id}/${Date.now()}.${ext}`;
+  options.onProgress?.(85);
+
+  // Supabase JS upload. Throws on RLS denial / network errors; the caller
+  // surfaces a clear message in that case.
+  const { error: uploadError } = await supabase.storage
+    .from('documents')
+    .upload(objectPath, uploadPayload, {
+      upsert: true,
+      contentType: compressed.mimeType,
+      cacheControl: '31536000',
+    });
+  if (uploadError) {
+    throw new Error(uploadError.message || 'Direct storage upload failed.');
+  }
+
+  // Build a public URL — bucket is public.
+  const { data: publicData } = supabase.storage.from('documents').getPublicUrl(objectPath);
+  const fileUrl = publicData?.publicUrl;
+  if (!fileUrl) throw new Error('Storage did not return a public URL for the uploaded file.');
+
+  // Insert the database row using the same column set the server uses, so the
+  // admin panel and customer dashboard render it consistently.
+  const now = Date.now();
+  const insertPayload = {
+    id: (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `doc-${user.id}-${now}`,
+    user_id: user.id,
+    original_name: compressed.fileName,
+    path: fileUrl,
+    cloudinary_url: fileUrl,
+    mimetype: compressed.mimeType,
+    size: compressed.compressedSize,
+    document_type: documentType,
+    doc_type: documentType,
+    file_url: fileUrl,
+    status: 'Pending Review',
+    uploaded_at: now,
+    created_at: now,
+  };
+
+  const { data: insertData, error: insertError } = await supabase
+    .from('documents')
+    .insert(insertPayload)
+    .select('id, original_name, uploaded_at, status, document_type, doc_type, mimetype, size, file_url')
+    .single();
+  if (insertError) {
+    throw new Error(insertError.message || 'Could not record document row in the database.');
+  }
+
+  options.onProgress?.(100);
+  const r = insertData || insertPayload;
+  const record: CustomerDocument = {
+    id: r.id,
+    name: r.original_name || compressed.fileName,
+    uploadedAt: r.uploaded_at || now,
+    status: (r.status as CustomerDocument['status']) || 'Pending Review',
+    documentType: r.document_type || r.doc_type || documentType,
+    rejectionReason: null,
+    size: r.size || compressed.compressedSize,
+    mimetype: r.mimetype || compressed.mimeType,
+    source: 'direct',
+  };
+  return { record, compressed };
+}
+
+/**
+ * Compresses a picked file to the brief's 4-20 KB band and uploads it.
+ *
+ * Strategy: try the Express upload first (which centralises validation +
+ * persistence), and if it returns 5xx / fails before validating (network,
+ * multer crashes, HTML error page from the catch-all route) fall back to a
+ * direct client-to-Supabase Storage write so the customer is never left
+ * staring at an alert dialog.
+ *
+ * Returns the persisted record plus the compression result. The caller can
+ * listen to progress via options.onProgress.
  */
 export async function uploadCompressedDocument(
   file: File,
   documentType: DocumentType,
   options: { token?: string | null; onProgress?: (percent: number) => void } = {}
-): Promise<{ record: CustomerDocument; compressed: CompressedDocument }> {
+): Promise<{ record: CustomerDocument; compressed: CompressedDocument; usedFallback: boolean }> {
   const token = options.token ?? (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
   if (!token) throw new Error('Login required');
   const compressed = await compressDocument(file, { onProgress: options.onProgress });
 
   const fd = new FormData();
-  // Use the compressed blob with its real filename + mimetype so the server
-  // sees the post-compression payload, not the raw picked file.
   const uploadBlob =
     compressed.file instanceof File
       ? compressed.file
@@ -49,30 +190,55 @@ export async function uploadCompressedDocument(
   fd.append('file', uploadBlob);
   fd.append('documentType', documentType);
 
-  const res = await fetch('/api/documents/upload', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}` },
-    body: fd,
-  });
-  const text = await res.text();
-  let json: any = {};
-  try { json = text ? JSON.parse(text) : {}; } catch { json = { raw: text }; }
-  if (!res.ok || !json?.ok) {
-    throw new Error(json?.error || json?.raw || 'Upload failed');
+  let serverError: string | null = null;
+  try {
+    const res = await fetch('/api/documents/upload', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    });
+    const parsed = await readJsonError(res, 'Upload failed');
+    if (parsed.ok) {
+      const f = parsed.json.file || parsed.json;
+      const record: CustomerDocument = {
+        id: f.id,
+        name: f.originalName || compressed.fileName,
+        uploadedAt: f.uploadedAt || Date.now(),
+        status: f.status || 'Pending Review',
+        documentType: f.documentType || documentType,
+        rejectionReason: f.rejectionReason || null,
+        size: f.size || compressed.compressedSize,
+        mimetype: f.mimetype || compressed.mimeType,
+        source: 'server',
+      };
+      return { record, compressed, usedFallback: false };
+    }
+    serverError = parsed.error;
+  } catch (err: any) {
+    serverError = err?.message || 'Network error talking to the server.';
   }
 
-  const f = json.file || json;
-  const record: CustomerDocument = {
-    id: f.id,
-    name: f.originalName || compressed.fileName,
-    uploadedAt: f.uploadedAt || Date.now(),
-    status: f.status || 'Pending Review',
-    documentType: f.documentType || documentType,
-    rejectionReason: f.rejectionReason || null,
-    size: f.size,
-    mimetype: f.mimetype,
-  };
-  return { record, compressed };
+  // Server route failed with something other than a 4xx client error — fall
+  // back to direct upload so the customer doesn't lose their docs.
+  const looksLikeClientError = serverError && /\b400\b|\b401\b|\b403\b|\b404\b|\b415\b|\b413\b/.test(serverError);
+  if (looksLikeClientError) {
+    // Don't fall back on validation errors — re-throw so the user fixes the input.
+    throw new Error(serverError || 'Upload rejected by the server.');
+  }
+
+  try {
+    options.onProgress?.(80);
+    const direct = await uploadDocumentDirect(file, documentType, { onProgress: options.onProgress });
+    return { ...direct, usedFallback: true };
+  } catch (fallbackErr: any) {
+    // Surface both messages — server's root cause plus fallback's
+    // downstream failure gives the customer enough context to file a
+    // useful bug report.
+    const detail = fallbackErr?.message || 'Direct fallback failed.';
+    throw new Error(serverError
+      ? `Server rejected the upload: ${serverError}. Direct fallback also failed: ${detail}`
+      : detail);
+  }
 }
 
 function authHeaders(): Record<string, string> {
@@ -82,24 +248,59 @@ function authHeaders(): Record<string, string> {
 }
 
 /**
- * Lists the signed-in user's documents (newest first). Returns an empty array
- * on network failure rather than throwing — dashboards stay online.
+ * Lists the signed-in user's documents. Tries the server first; on 5xx /
+ * network failure falls back to a direct Supabase query so the dashboard
+ * remains responsive even if the Express API is down.
  */
 export async function listCustomerDocuments(): Promise<CustomerDocument[]> {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+  const userId = typeof window !== 'undefined' ? localStorage.getItem('shubhSanjogUser') : null;
+  // 1) Server list
   try {
-    const res = await fetch('/api/documents', { headers: authHeaders() });
-    if (!res.ok) return [];
-    const json = await res.json();
-    const docs = json.documents || [];
-    return docs.map((d: any) => ({
-      id: d.id,
-      name: d.originalName,
-      uploadedAt: d.uploadedAt,
-      status: d.status,
-      documentType: d.documentType || null,
-      rejectionReason: d.rejectionReason || null,
-      size: d.size,
-      mimetype: d.mimetype,
+    if (token) {
+      const res = await fetch('/api/documents', { headers: authHeaders() });
+      if (res.ok) {
+        const json = await res.json();
+        const docs = (json.documents || []) as any[];
+        return docs.map((d) => ({
+          id: d.id,
+          name: d.originalName,
+          uploadedAt: d.uploadedAt,
+          status: d.status,
+          documentType: d.documentType || null,
+          rejectionReason: d.rejectionReason || null,
+          size: d.size,
+          mimetype: d.mimetype,
+          source: 'server' as const,
+        }));
+      }
+    }
+  } catch {
+    /* fall through to direct query */
+  }
+
+  // 2) Direct Supabase query (only when the user is signed in via Supabase).
+  try {
+    const supabase = getSupabase();
+    if (!supabase) return [];
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return [];
+    const { data, error } = await supabase
+      .from('documents')
+      .select('id, original_name, uploaded_at, status, document_type, doc_type, rejection_reason, size, mimetype, file_url')
+      .eq('user_id', user.id)
+      .order('uploaded_at', { ascending: false });
+    if (error || !data) return [];
+    return data.map((r: any) => ({
+      id: r.id,
+      name: r.original_name,
+      uploadedAt: Number(r.uploaded_at) || Date.now(),
+      status: r.status,
+      documentType: r.document_type || r.doc_type || null,
+      rejectionReason: r.rejection_reason || null,
+      size: r.size,
+      mimetype: r.mimetype,
+      source: 'direct' as const,
     }));
   } catch {
     return [];
@@ -107,16 +308,57 @@ export async function listCustomerDocuments(): Promise<CustomerDocument[]> {
 }
 
 /**
- * Delete a document. Server removes store row + cloud/local backing + DB row.
- * Audit-logged. Returns true on 2xx, false on a denied/retryable failure.
+ * Delete a document. Tries the server route first; on 5xx / network failure
+ * removes the Supabase Storage object and the documents row directly.
+ * Audit-logging only happens server-side; direct deletes leave a gap in the
+ * audit log that the admin can see.
  */
 export async function deleteCustomerDocument(id: string): Promise<boolean> {
+  // 1) Server delete
   try {
     const res = await fetch(`/api/documents/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       headers: authHeaders(),
     });
-    return res.ok;
+    if (res.ok) return true;
+    // 5xx → try direct. 4xx → surface the server's message and stop.
+    if (res.status >= 400 && res.status < 500) {
+      const parsed = await readJsonError(res, 'Delete failed');
+      throw new Error(parsed.ok ? 'Delete failed' : parsed.error);
+    }
+  } catch (err: any) {
+    if (err instanceof Error && /\b400\b|\b401\b|\b403\b|\b404\b/.test(err.message)) {
+      alert(err.message);
+      return false;
+    }
+    // fall through to direct
+  }
+
+  // 2) Direct Supabase delete — best-effort, succeeds even when the API
+  // is unreachable.
+  try {
+    const supabase = getSupabase();
+    if (!supabase) return false;
+    const { data: row, error: readErr } = await supabase
+      .from('documents')
+      .select('file_url, user_id')
+      .eq('id', id)
+      .maybeSingle();
+    if (!readErr && row?.file_url) {
+      try {
+        const url = new URL(row.file_url);
+        const marker = '/storage/v1/object/public/documents/';
+        const idx = url.pathname.indexOf(marker);
+        if (idx >= 0) {
+          const objectPath = decodeURIComponent(url.pathname.slice(idx + marker.length));
+          await supabase.storage.from('documents').remove([objectPath]);
+        }
+      } catch {
+        /* URL parse / remove failure is non-fatal — the row will still go */
+      }
+    }
+    const { error: delErr } = await supabase.from('documents').delete().eq('id', id);
+    return !delErr;
   } catch {
     return false;
   }
@@ -124,14 +366,49 @@ export async function deleteCustomerDocument(id: string): Promise<boolean> {
 
 /**
  * Fetch a download URL the server has signed and trigger a browser download
- * to the user's machine. Equivalent to the historical "Download" button —
- * preserved here so the component file stays focused on UX.
+ * to the user's machine.
+ *
+ * Public documents (the `documents` bucket is public since the latest
+ * migration) can also be downloaded directly via the public URL — we try
+ * that path first so the user gets their file even when the Express API is
+ * down, and only fall back to the signed route for old rows with private
+ * Cloudinary URLs.
  */
 export async function downloadCustomerDocument(
   id: string,
   suggestedName: string
 ): Promise<boolean> {
   try {
+    // Direct path: read the row from Supabase and stream the public URL.
+    try {
+      const supabase = getSupabase();
+      if (supabase) {
+        const { data: row } = await supabase
+          .from('documents')
+          .select('file_url, original_name, cloudinary_url')
+          .eq('id', id)
+          .maybeSingle();
+        const url = row?.file_url || row?.cloudinary_url;
+        if (url && /^https?:\/\//.test(url)) {
+          const resp = await fetch(url);
+          if (resp.ok) {
+            const blob = await resp.blob();
+            const objectUrl = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = objectUrl;
+            a.download = suggestedName || row?.original_name || 'download';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(objectUrl);
+            return true;
+          }
+        }
+      }
+    } catch {
+      /* fall through to signed-URL path */
+    }
+
     const headers = authHeaders();
     if (!headers.Authorization) return false;
     const sign = await fetch(`/api/documents/${encodeURIComponent(id)}/sign`, { headers });

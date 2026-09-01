@@ -38,6 +38,8 @@ function loadEnv() {
 
 loadEnv();
 
+const { errorHandler } = require('./middleware/errorHandler');
+
 const db = require('./db');
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
@@ -121,6 +123,13 @@ function createApp() {
   app.use('/api/notifications', require('./routes/notifications'));
   app.use('/api/payments', require('./routes/payments'));
   app.use('/api/inquiries', require('./routes/inquiries'));
+
+  // ─── Last-resort error handler ─────────────────────────────────────────────
+  // Must be registered AFTER every route so `next(err)` calls from controllers
+  // land here. Always responds with `{ success: false, error }` JSON, replacing
+  // Express's default HTML error page that customers used to see when a multer
+  // upload overshot the file-size limit or some other throw bubbled out.
+  app.use((err, req, res, next) => errorHandler(err, req, res, next));
 
   return app;
 }
