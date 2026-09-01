@@ -407,77 +407,48 @@ export default function CustomerDashboardPage() {
     setPhotoUploading(true);
     setStatusMessage('');
     try {
-      // Upload to Cloudinary via API with face alignment (format:auto, quality:auto, gravity:face, crop:thumb)
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('folder', 'shubh-sanjog/profiles');
-      const res = await fetch('/api/upload', { method: 'POST', body: formData });
-      let photoUrl: string | null = null;
-      let cloudinaryError: string | null = null;
-      if (res.ok) {
-        const data = (await res.json()) as { secure_url?: string; url?: string };
-        photoUrl = data.secure_url || data.url || null;
-        if (photoUrl) {
-          console.log('[customer] Cloudinary upload succeeded:', photoUrl);
-        }
-      } else {
-        try {
-          const errData = (await res.json()) as { error?: string; details?: string };
-          cloudinaryError = errData.error || `Cloudinary upload failed (${res.status})`;
-          console.error('[customer] cloudinaryError:', cloudinaryError, errData);
-        } catch {
-          cloudinaryError = `Cloudinary upload failed (${res.status})`;
-          console.error('[customer] cloudinaryError:', cloudinaryError);
-        }
-      }
-      // Fall back gracefully to Supabase Storage if Cloudinary fails or env vars missing
-      if (!photoUrl) {
-        if (cloudinaryError) {
-          console.warn('[customer] Cloudinary failed, falling back to Supabase Storage:', cloudinaryError);
-        } else {
-          console.warn('[customer] No Cloudinary URL, falling back to Supabase Storage');
-        }
-        const supabase = getSupabase();
-        if (supabase) {
-          const filePath = `${supabaseUser.id}/${Date.now()}-${file.name}`;
-          // Try profiles bucket first, then avatars bucket
-          let supabaseError: string | null = null;
-          try {
-            const { error } = await supabase.storage.from('profiles').upload(filePath, file, { upsert: true });
-            if (!error) {
-              const { data } = supabase.storage.from('profiles').getPublicUrl(filePath);
-              photoUrl = data.publicUrl;
-              console.log('[customer] Supabase Storage (profiles) fallback succeeded:', photoUrl);
-            } else {
-              supabaseError = error.message;
-              console.error('[customer] Supabase storage (profiles) error:', error.message);
-              // Try avatars bucket as second fallback
-              const { error: err2 } = await supabase.storage.from('avatars').upload(filePath, file, { upsert: true });
-              if (!err2) {
-                const { data } = supabase.storage.from('avatars').getPublicUrl(filePath);
-                photoUrl = data.publicUrl;
-                console.log('[customer] Supabase Storage (avatars) fallback succeeded:', photoUrl);
-              } else {
-                console.error('[customer] Supabase storage (avatars) error:', err2.message);
-              }
-            }
-          } catch (e) {
-            console.error('[customer] Supabase fallback exception:', e);
-          }
-          if (!photoUrl && supabaseError) {
-            console.error('[customer] Both Cloudinary and Supabase failed', { cloudinaryError, supabaseError });
-          }
-        } else {
-          console.error('[customer] Supabase client not available for fallback');
-        }
-      }
-      if (!photoUrl) {
-        const details = cloudinaryError ? `Cloudinary: ${cloudinaryError}` : 'No URL returned';
-        throw new Error(`Upload failed - ${details}. Please try again or check Supabase storage buckets.`);
-      }
+      // Direct Supabase Storage upload (do NOT depend on Cloudinary env vars for profile photos)
       const supabase = getSupabase();
+      if (!supabase) throw new Error('Supabase not configured');
+      const fileExt = file.name.split('.').pop() || 'jpg';
+      const filePath = `${supabaseUser.id}/${Date.now()}.${fileExt}`;
+      let photoUrl: string | null = null;
+      let lastError: string | null = null;
+      // Primary bucket: avatars (per task), fallback: profiles
+      try {
+        const { error: avatarsError } = await supabase.storage.from('avatars').upload(filePath, file, {
+          upsert: true,
+          contentType: file.type,
+        });
+        if (!avatarsError) {
+          const { data } = supabase.storage.from('avatars').getPublicUrl(filePath);
+          photoUrl = data.publicUrl;
+          console.log('[customer] Supabase Storage (avatars) upload succeeded:', photoUrl);
+        } else {
+          lastError = avatarsError.message;
+          console.warn('[customer] avatars bucket upload failed, trying profiles:', avatarsError.message);
+          const { error: profilesError } = await supabase.storage.from('profiles').upload(filePath, file, {
+            upsert: true,
+            contentType: file.type,
+          });
+          if (!profilesError) {
+            const { data } = supabase.storage.from('profiles').getPublicUrl(filePath);
+            photoUrl = data.publicUrl;
+            console.log('[customer] Supabase Storage (profiles) fallback succeeded:', photoUrl);
+          } else {
+            lastError = profilesError.message;
+            console.error('[customer] Supabase storage (profiles) error:', profilesError.message);
+          }
+        }
+      } catch (e) {
+        lastError = e instanceof Error ? e.message : String(e);
+        console.error('[customer] Supabase upload exception:', e);
+      }
+      if (!photoUrl) {
+        throw new Error(lastError ? `Upload failed - ${lastError}` : 'Upload failed - no URL returned');
+      }
+      // Update Supabase profiles table - ensure avatar_url/photo_url are set (reuse existing supabase client)
       if (supabase) {
-        // Update Supabase profiles table - ensure avatar_url/photo_url are set
         const updatePayload = {
           photo_url: photoUrl,
           avatar_url: photoUrl,
