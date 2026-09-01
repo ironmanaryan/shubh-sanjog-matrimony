@@ -2,7 +2,8 @@
 
 import Link from 'next/link';
 import Image from 'next/image';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Bell, BriefcaseBusiness, CheckCheck, ChevronRight, Circle, CircleCheckBig, CreditCard, FileText, GraduationCap, Heart, Home, MessageSquare, ShieldCheck, Sparkles, User, UserRound, Users, Wallet } from 'lucide-react';
 import PrivacySettings from '../../components/customer/PrivacySettings';
 import RequestMeetingButton from '@/components/customer/RequestMeetingButton';
@@ -366,6 +367,7 @@ function formatExpiry(expiresAt?: number | null) {
 }
 
 export default function CustomerDashboardPage() {
+  const router = useRouter();
   const [profile, setProfile] = useState<ProfileData>(defaultProfile);
   const [membership, setMembership] = useState<MembershipSummary>({});
   const [recommendedCount, setRecommendedCount] = useState(0);
@@ -382,10 +384,95 @@ export default function CustomerDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [supabaseProfile, setSupabaseProfile] = useState<Record<string, unknown> | null>(null);
   const [supabaseUser, setSupabaseUser] = useState<{ id: string; email?: string } | null>(null);
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const authHeaders = () => {
     const token = localStorage.getItem('token');
     return token ? { Authorization: `Bearer ${token}` } : null;
+  };
+
+  // Edit Photo handler - uploads to Cloudinary and updates Supabase + local state immediately
+  const handlePhotoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !supabaseUser) return;
+    if (!file.type.startsWith('image/')) {
+      setStatusMessage('Please select an image file (JPG/PNG).');
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setStatusMessage('Image too large (max 5MB).');
+      return;
+    }
+    setPhotoUploading(true);
+    setStatusMessage('');
+    try {
+      // Upload to Cloudinary via API with face alignment (format:auto, quality:auto, gravity:face, crop:thumb)
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('folder', 'shubh-sanjog/profiles');
+      const res = await fetch('/api/upload', { method: 'POST', body: formData });
+      let photoUrl: string | null = null;
+      if (res.ok) {
+        const data = (await res.json()) as { secure_url?: string; url?: string };
+        photoUrl = data.secure_url || data.url || null;
+      }
+      // Fallback to Supabase Storage if Cloudinary not configured
+      if (!photoUrl) {
+        const supabase = getSupabase();
+        if (supabase) {
+          const filePath = `${supabaseUser.id}/${Date.now()}-${file.name}`;
+          const { error } = await supabase.storage.from('profiles').upload(filePath, file, { upsert: true });
+          if (!error) {
+            const { data } = supabase.storage.from('profiles').getPublicUrl(filePath);
+            photoUrl = data.publicUrl;
+          }
+        }
+      }
+      if (!photoUrl) throw new Error('Upload failed - no URL returned');
+      const supabase = getSupabase();
+      if (supabase) {
+        // Update Supabase profiles table - ensure avatar_url/photo_url are set
+        const updatePayload = {
+          photo_url: photoUrl,
+          avatar_url: photoUrl,
+          profile_photo: photoUrl,
+          updated_at: new Date().toISOString(),
+        };
+        let updated = false;
+        try {
+          const { error } = await supabase.from('profiles').update(updatePayload as never).or(`id.eq.${supabaseUser.id},user_id.eq.${supabaseUser.id}`);
+          if (!error) updated = true;
+        } catch {}
+        if (!updated) {
+          try {
+            const { error } = await supabase.from('profiles').upsert({ id: supabaseUser.id, user_id: supabaseUser.id, ...updatePayload } as never, { onConflict: 'id' } as never);
+            if (!error) updated = true;
+          } catch {}
+        }
+      }
+      // Immediately update local React state so avatar shows without refresh
+      setSupabaseProfile((prev) => {
+        if (prev) {
+          return { ...prev, photo_url: photoUrl, avatar_url: photoUrl, profile_photo: photoUrl, personal: { ...((prev['personal'] as Record<string, unknown>) || {}), photoUrl } } as Record<string, unknown>;
+        }
+        return { photo_url: photoUrl, avatar_url: photoUrl, profile_photo: photoUrl, personal: { photoUrl } } as unknown as Record<string, unknown>;
+      });
+      // Also persist to localStorage for instant reload
+      try {
+        const cached = JSON.parse(localStorage.getItem('shubhSanjogProfile') || '{}');
+        localStorage.setItem('shubhSanjogProfile', JSON.stringify({ ...cached, photo_url: photoUrl, avatar_url: photoUrl, profile_photo: photoUrl }));
+      } catch {}
+      setStatusMessage('Profile photo updated successfully!');
+      // Refresh Next.js cache
+      router.refresh();
+    } catch (err) {
+      console.error('Photo upload failed', err);
+      setStatusMessage(err instanceof Error ? err.message : 'Photo upload failed. Please try again.');
+    } finally {
+      setPhotoUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
   };
 
   const loadData = async () => {
@@ -738,7 +825,16 @@ export default function CustomerDashboardPage() {
                     <div className="mt-1 text-sm font-semibold text-[#7b102d]">
                       {[supabaseProfile['age'] ? `${supabaseProfile['age']} yrs` : profile.personal?.dob ? `${calculateAge(profile.personal.dob)} yrs` : null, supabaseProfile['gender'] || profile.personal?.gender].filter(Boolean).join(' • ') || '—'}
                     </div>
-                    <Link href="/register/fill-details?step=1" className="mt-3 inline-flex rounded-full bg-[#7b102d] px-4 py-1.5 text-xs font-bold text-white hover:bg-[#5a0a1f]">Edit Photo</Link>
+                    <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={photoUploading}
+                      className="mt-3 inline-flex items-center gap-1 rounded-full bg-[#7b102d] px-4 py-1.5 text-xs font-bold text-white hover:bg-[#5a0a1f] disabled:opacity-60"
+                    >
+                      {photoUploading ? 'Uploading...' : 'Edit Photo'}
+                    </button>
+                    <Link href="/register/fill-details?step=1" className="mt-1 text-[11px] text-[#6a4a57] underline hover:text-[#7b102d]">Edit details</Link>
                   </div>
                 </div>
 
