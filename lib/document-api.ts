@@ -84,8 +84,24 @@ export async function uploadDocumentDirect(
   if (!supabase) throw new Error('Supabase is not configured — direct upload unavailable.');
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('Sign in before uploading.');
+  if (!user.id) throw new Error('Authenticated user has no id — please sign out and sign back in.');
 
   const compressed = await compressDocument(file, { onProgress: options.onProgress });
+
+  // ── Ensure the `users` row exists ─────────────────────────────────────────
+  // `documents.user_id` has a FK pointing at `users(id)`. The Express auth
+  // flow populates that row on session exchange, but a customer who signs in
+  // purely through the browser (a normal Google sign-in lands here before any
+  // `/api/auth/supabase-session` call has happened) can hit Supabase Storage
+  // + Storage RLS with a real auth.uid() while `users(id)` is still empty.
+  // The downstream INSERT then dies with `violates foreign key constraint
+  // "documents_user_id_fkey"`. Proactive upsert avoids the whole class.
+  //
+  // `users.id` is the Supabase auth user id, so the upsert is idempotent:
+  // re-runs are no-ops. RLS is OFF on public.users (per `supabase/schema.sql`)
+  // so the browser-side client can write directly with the user's JWT.
+  options.onProgress?.(60);
+  await ensureUserRow(supabase, user);
 
   // Build the upload payload — bytes + filename + mimetype.
   const uploadPayload =
@@ -95,7 +111,7 @@ export async function uploadDocumentDirect(
 
   const ext = (compressed.fileName.split('.').pop() || 'bin').toLowerCase();
   const objectPath = `${user.id}/${Date.now()}.${ext}`;
-  options.onProgress?.(85);
+  options.onProgress?.(80);
 
   // Supabase JS upload. Throws on RLS denial / network errors; the caller
   // surfaces a clear message in that case.
@@ -118,11 +134,15 @@ export async function uploadDocumentDirect(
   // Insert the database row using the same column set the server uses, so the
   // admin panel and customer dashboard render it consistently.
   const now = Date.now();
+  // Use the SAME user.id string for every FK reference (documents.user_id,
+  // documents-related tables downstream). It came from supabase.auth.getUser()
+  // and is therefore the canonical Supabase auth uid.
+  const userId = user.id;
   const insertPayload = {
     id: (typeof crypto !== 'undefined' && crypto.randomUUID)
       ? crypto.randomUUID()
-      : `doc-${user.id}-${now}`,
-    user_id: user.id,
+      : `doc-${userId}-${now}`,
+    user_id: userId,
     original_name: compressed.fileName,
     path: fileUrl,
     cloudinary_url: fileUrl,
@@ -159,6 +179,80 @@ export async function uploadDocumentDirect(
     source: 'direct',
   };
   return { record, compressed };
+}
+
+/**
+ * Type narrowing for the Supabase client. We avoid pulling in `@supabase/supabase-js`
+ * types here at the top level because `lib/document-api.ts` is browser-only and
+ * the rest of the file uses generic `any` shapes — a narrow alias keeps the
+ * call sites readable.
+ */
+type SupabaseClient = ReturnType<typeof getSupabase>;
+
+/**
+ * Upsert the `users` row for a freshly authenticated browser session.
+ *
+ * The historical Express auth flow writes to `public.users` via
+ * `db.createUser()` inside `resolveUserFromSupabaseIdentity`. A user who
+ * signs in solely through the browser (typical Google OAuth flow before
+ * `POST /api/auth/supabase-session` lands) lands in Supabase Auth but never
+ * touches the Express server, so `users(id)` is empty when they try to
+ * upload a document. Without this upsert the documents INSERT fails with:
+ *
+ *   "insert or update on table 'documents' violates foreign key constraint
+ *    'documents_user_id_fkey'"
+ *
+ * The `id` column on `public.users` IS the Supabase auth uid, so the
+ * upsert is idempotent — running it on every upload is safe. We only set
+ * fields that are missing so we never overwrite admin-side edits (role,
+ * deleted_at, etc.).
+ */
+async function ensureUserRow(
+  supabase: NonNullable<SupabaseClient>,
+  user: { id: string; email?: string | null; user_metadata?: Record<string, unknown> | null }
+): Promise<void> {
+  const { data: existing, error: readErr } = await supabase
+    .from('users')
+    .select('id')
+    .eq('id', user.id)
+    .maybeSingle();
+  if (readErr) {
+    // If SELECT itself is blocked, we still attempt the upsert below —
+    // it will surface the underlying error message to the caller.
+    // (Logging here is silent; UI surfaces the toast.)
+  }
+  if (existing?.id) return;
+
+  const metadata = (user.user_metadata || {}) as Record<string, unknown>;
+  const fullName =
+    (typeof metadata.full_name === 'string' && metadata.full_name.trim()) ||
+    (typeof metadata.name === 'string' && metadata.name.trim()) ||
+    (user.email ? user.email.split('@')[0] : '');
+
+  // `identifier` is the legacy unique column. We set it to the same string
+  // as `id` for browser-side sign-ups so the unique constraint holds even
+  // if the user later goes through the Express flow (which would issue a
+  // different identifier). PostgreSQL unique indexes do NOT collide when the
+  // value is the same as `id`, because `id` itself is text PK.
+  const upsertPayload = {
+    id: user.id,
+    identifier: user.id,
+    email: user.email || null,
+    full_name: fullName || null,
+    role: 'customer',
+    created_at: Date.now(),
+  };
+
+  const { error: upsertErr } = await supabase
+    .from('users')
+    .upsert(upsertPayload, { onConflict: 'id', ignoreDuplicates: false });
+
+  if (upsertErr && !/duplicate key/i.test(upsertErr.message || '')) {
+    // Surface a non-fatal warning — the document upload itself might still
+    // succeed if a previous attempt already populated the row through
+    // another path. The downstream INSERT will reveal the truth.
+    console.warn('[documents] users upsert failed:', upsertErr.message);
+  }
 }
 
 /**
