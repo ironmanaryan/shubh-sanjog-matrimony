@@ -11,6 +11,7 @@ import { compatibilityBadgeClass } from '@/lib/compatibility';
 import { buildMeetingRequestMessage } from '@/lib/whatsapp';
 import { API, requestJson } from '@/lib/api-client';
 import { getSupabase } from '@/lib/supabase';
+import { compressAvatar, formatBytes } from '@/lib/image-compress';
 
 // Customer panel sections from the reference scope document
 
@@ -385,108 +386,215 @@ export default function CustomerDashboardPage() {
   const [supabaseProfile, setSupabaseProfile] = useState<Record<string, unknown> | null>(null);
   const [supabaseUser, setSupabaseUser] = useState<{ id: string; email?: string } | null>(null);
   const [photoUploading, setPhotoUploading] = useState(false);
+  const [photoProgress, setPhotoProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Avatar display is driven by three sources, highest priority first:
+  //   1. photoPreviewUrl — a local blob: URL shown the instant a file is
+  //      picked, so the card updates before the network round trip finishes.
+  //   2. avatarUrl       — the Supabase Storage URL returned by a successful
+  //      upload. Set synchronously from the response, so no refresh is needed.
+  //   3. storedAvatarUrl — whatever was already saved on the profile row.
+  // The initial letter is rendered ONLY when all three are null/undefined.
+  const [photoPreviewUrl, setPhotoPreviewUrl] = useState<string | null>(null);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [avatarBroken, setAvatarBroken] = useState(false);
+  const previewUrlRef = useRef<string | null>(null);
 
   const authHeaders = () => {
     const token = localStorage.getItem('token');
     return token ? { Authorization: `Bearer ${token}` } : null;
   };
 
-  // Edit Photo handler - uploads to Cloudinary and updates Supabase + local state immediately
+  /**
+   * Swaps the local preview, revoking the previous blob: URL.
+   *
+   * The ref (not a useEffect with deps) is what makes this StrictMode-safe: in
+   * dev React double-invokes effects, and a cleanup keyed on the URL would
+   * revoke the very URL that is currently on screen.
+   */
+  const swapPreview = (url: string | null) => {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    previewUrlRef.current = url;
+    setPhotoPreviewUrl(url);
+  };
+
+  // Release the last preview when the dashboard unmounts.
+  useEffect(() => {
+    return () => {
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    };
+  }, []);
+
+  // The URL currently saved on the profile row, or null if there is none.
+  const storedAvatarUrl = useMemo(() => {
+    const p = supabaseProfile;
+    if (!p) return null;
+    const personal = p['personal'] as Record<string, unknown> | undefined;
+    const candidate =
+      (p['avatar_url'] as string) ||
+      (p['photo_url'] as string) ||
+      (p['profile_photo'] as string) ||
+      (personal?.['photoUrl'] as string);
+    return typeof candidate === 'string' && candidate.trim() ? candidate : null;
+  }, [supabaseProfile]);
+
+  // What the profile card actually renders. `avatarBroken` guards against a
+  // saved URL that 404s or points at a host next/image refuses — the card then
+  // degrades to the initial letter instead of a broken-image icon.
+  const displayAvatarUrl = avatarBroken ? null : photoPreviewUrl || avatarUrl || storedAvatarUrl;
+
+  /**
+   * Edit Photo.
+   *
+   * Client-side compress → Supabase Storage (`avatars`) → public URL written
+   * to profiles.avatar_url → React state updated in the same tick.
+   *
+   * A note on why this is Supabase Storage and not Cloudinary: profile photos
+   * are written straight from the browser with the user's own JWT, so they
+   * must not depend on Cloudinary credentials being present in the server env.
+   * The `avatars` bucket needs its storage.objects RLS policies in place —
+   * see supabase/storage_avatars.sql (applied via `npm run avatar:storage-setup`).
+   */
   const handlePhotoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (!file || !supabaseUser) return;
+    if (!file) return;
+
+    // Reset the input immediately so picking the same file twice in a row
+    // still fires a change event.
+    if (fileInputRef.current) fileInputRef.current.value = '';
+
+    if (!supabaseUser) {
+      setStatusMessage('Please sign in before changing your profile photo.');
+      return;
+    }
     if (!file.type.startsWith('image/')) {
-      setStatusMessage('Please select an image file (JPG/PNG).');
+      setStatusMessage('Please choose an image file (JPG, PNG or WebP).');
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      setStatusMessage('Image too large (max 5MB).');
-      return;
-    }
+
     setPhotoUploading(true);
+    setPhotoProgress(0);
     setStatusMessage('');
+    setAvatarBroken(false);
+
+    // 1. Instant preview from the picked file — paints before any network work.
+    swapPreview(URL.createObjectURL(file));
+
+    let compressedUrl: string | null = null;
     try {
-      // Direct Supabase Storage upload (do NOT depend on Cloudinary env vars for profile photos)
-      const supabase = getSupabase();
-      if (!supabase) throw new Error('Supabase not configured');
-      const fileExt = file.name.split('.').pop() || 'jpg';
-      const filePath = `${supabaseUser.id}/${Date.now()}.${fileExt}`;
-      let photoUrl: string | null = null;
-      let lastError: string | null = null;
-      // Primary bucket: avatars (per task), fallback: profiles
-      try {
-        const { error: avatarsError } = await supabase.storage.from('avatars').upload(filePath, file, {
-          upsert: true,
-          contentType: file.type,
-        });
-        if (!avatarsError) {
-          const { data } = supabase.storage.from('avatars').getPublicUrl(filePath);
-          photoUrl = data.publicUrl;
-          console.log('[customer] Supabase Storage (avatars) upload succeeded:', photoUrl);
-        } else {
-          lastError = avatarsError.message;
-          console.warn('[customer] avatars bucket upload failed, trying profiles:', avatarsError.message);
-          const { error: profilesError } = await supabase.storage.from('profiles').upload(filePath, file, {
-            upsert: true,
-            contentType: file.type,
-          });
-          if (!profilesError) {
-            const { data } = supabase.storage.from('profiles').getPublicUrl(filePath);
-            photoUrl = data.publicUrl;
-            console.log('[customer] Supabase Storage (profiles) fallback succeeded:', photoUrl);
-          } else {
-            lastError = profilesError.message;
-            console.error('[customer] Supabase storage (profiles) error:', profilesError.message);
-          }
-        }
-      } catch (e) {
-        lastError = e instanceof Error ? e.message : String(e);
-        console.error('[customer] Supabase upload exception:', e);
-      }
-      if (!photoUrl) {
-        throw new Error(lastError ? `Upload failed - ${lastError}` : 'Upload failed - no URL returned');
-      }
-      // Update Supabase profiles table - ensure avatar_url/photo_url are set (reuse existing supabase client)
-      if (supabase) {
-        const updatePayload = {
-          photo_url: photoUrl,
-          avatar_url: photoUrl,
-          profile_photo: photoUrl,
-          updated_at: new Date().toISOString(),
-        };
-        let updated = false;
-        try {
-          const { error } = await supabase.from('profiles').update(updatePayload as never).or(`id.eq.${supabaseUser.id},user_id.eq.${supabaseUser.id}`);
-          if (!error) updated = true;
-        } catch {}
-        if (!updated) {
-          try {
-            const { error } = await supabase.from('profiles').upsert({ id: supabaseUser.id, user_id: supabaseUser.id, ...updatePayload } as never, { onConflict: 'id' } as never);
-            if (!error) updated = true;
-          } catch {}
-        }
-      }
-      // Immediately update local React state so avatar shows without refresh
-      setSupabaseProfile((prev) => {
-        if (prev) {
-          return { ...prev, photo_url: photoUrl, avatar_url: photoUrl, profile_photo: photoUrl, personal: { ...((prev['personal'] as Record<string, unknown>) || {}), photoUrl } } as Record<string, unknown>;
-        }
-        return { photo_url: photoUrl, avatar_url: photoUrl, profile_photo: photoUrl, personal: { photoUrl } } as unknown as Record<string, unknown>;
+      // 2. Compress any input (10 MB, 50 MB, …) down to a few KB.
+      const compressed = await compressAvatar(file, {
+        onProgress: setPhotoProgress,
       });
-      // Also persist to localStorage for instant reload
+      compressedUrl = compressed.objectUrl;
+
+      const supabase = getSupabase();
+      if (!supabase) throw new Error('Storage is not configured — please try again later.');
+
+      // 3. Upload to the `avatars` bucket under this user's own folder. The
+      //    folder prefix is what the storage RLS policy checks, so it must be
+      //    exactly auth.uid(). A fresh filename each time means no CDN staleness.
+      const filePath = `${supabaseUser.id}/avatar-${Date.now()}.${compressed.extension}`;
+      const { error: uploadError } = await supabase.storage
+        .from('avatars')
+        .upload(filePath, compressed.blob, {
+          upsert: true,
+          contentType: compressed.mimeType,
+          cacheControl: '31536000',
+        });
+
+      if (uploadError) {
+        // Surface the real cause. The historical failure here was a 403
+        // "new row violates row-level security policy" from missing policies.
+        throw new Error(uploadError.message || 'Upload was rejected by storage.');
+      }
+
+      const { data: publicUrlData } = supabase.storage.from('avatars').getPublicUrl(filePath);
+      const photoUrl = publicUrlData?.publicUrl;
+      if (!photoUrl) throw new Error('Storage did not return a public URL.');
+
+      // 4. Persist to profiles.avatar_url (plus the legacy mirrored columns).
+      const updatePayload = {
+        avatar_url: photoUrl,
+        photo_url: photoUrl,
+        profile_photo: photoUrl,
+        updated_at: new Date().toISOString(),
+      };
+
+      // Try the fast path (row already exists), then fall back to an upsert for
+      // users whose row was never bootstrapped.
+      const { error: updateError } = await supabase
+        .from('profiles')
+        .update(updatePayload as never)
+        .eq('id', supabaseUser.id);
+
+      if (updateError) {
+        const { error: upsertError } = await supabase
+          .from('profiles')
+          .upsert({ id: supabaseUser.id, user_id: supabaseUser.id, ...updatePayload } as never, {
+            onConflict: 'id',
+          } as never);
+        if (upsertError) {
+          console.warn('[customer] profile update failed:', upsertError.message);
+          // Not fatal: the file is stored and the photo is shown. Only the
+          // saved reference is missing, so tell the user honestly.
+          setStatusMessage(
+            'Photo uploaded, but saving it to your profile failed. It may not survive a reload.'
+          );
+        }
+      }
+
+      // 5. Point the preview at the compressed result and commit it as the
+      //    avatar straight away — no page refresh required.
+      swapPreview(compressedUrl);
+      compressedUrl = null; // ownership transferred to swapPreview; do not revoke
+      setAvatarUrl(photoUrl);
+
+      // Keep the profile row in sync so other sections read the new photo.
+      setSupabaseProfile((prev) => {
+        const base = prev ?? ({} as Record<string, unknown>);
+        const personal = (base['personal'] as Record<string, unknown>) ?? {};
+        return {
+          ...base,
+          avatar_url: photoUrl,
+          photo_url: photoUrl,
+          profile_photo: photoUrl,
+          personal: { ...personal, photoUrl },
+        } as Record<string, unknown>;
+      });
+
       try {
         const cached = JSON.parse(localStorage.getItem('shubhSanjogProfile') || '{}');
-        localStorage.setItem('shubhSanjogProfile', JSON.stringify({ ...cached, photo_url: photoUrl, avatar_url: photoUrl, profile_photo: photoUrl }));
-      } catch {}
-      setStatusMessage('Profile photo updated successfully!');
-      // Refresh Next.js cache
+        localStorage.setItem(
+          'shubhSanjogProfile',
+          JSON.stringify({ ...cached, avatar_url: photoUrl, photo_url: photoUrl, profile_photo: photoUrl })
+        );
+      } catch {
+        /* localStorage unavailable (private mode) — non-fatal */
+      }
+
+      setStatusMessage(
+        `Profile photo updated — ${formatBytes(compressed.originalSize)} compressed to ${formatBytes(
+          compressed.compressedSize
+        )}.`
+      );
       router.refresh();
     } catch (err) {
-      console.error('Photo upload failed', err);
-      setStatusMessage(err instanceof Error ? err.message : 'Photo upload failed. Please try again.');
+      console.error('[customer] Photo upload failed:', err);
+      const message = err instanceof Error ? err.message : '';
+      setStatusMessage(
+        /row-level security/i.test(message)
+          ? 'Upload blocked by storage permissions. Run `npm run avatar:storage-setup` to apply the avatar policies.'
+          : message || 'Photo upload failed. Please try again.'
+      );
+      // Roll the preview back to whatever was there before.
+      swapPreview(null);
     } finally {
+      // Only revoke if ownership was not handed to swapPreview.
+      if (compressedUrl) URL.revokeObjectURL(compressedUrl);
       setPhotoUploading(false);
+      setPhotoProgress(0);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -818,23 +926,50 @@ export default function CustomerDashboardPage() {
                 {/* Profile Picture */}
                 <div className="flex flex-col items-center gap-3 rounded-2xl bg-[#fffaf3] p-5">
                   {(() => {
-                    // Database audit: profiles table has avatar_url, photo_url, profile_photo (all text, per supabase/profiles_migration.sql:63-65)
-                    // No image_url column exists. Prioritize avatar_url as primary.
-                    const photoUrl = (supabaseProfile['avatar_url'] as string) || (supabaseProfile['photo_url'] as string) || (supabaseProfile['profile_photo'] as string) || (supabaseProfile['cloudinary_url'] as string) || (supabaseProfile['personal'] as Record<string, unknown>)?.['photoUrl'] as string;
-                    return photoUrl ? (
-                      <Image
-                        src={photoUrl}
-                        alt={String(supabaseProfile['full_name'] || fullName)}
-                        width={160}
-                        height={160}
-                        sizes="160px"
-                        quality={75}
-                        className="h-40 w-40 rounded-3xl object-cover shadow-md ring-2 ring-[#f2d9a8]"
-                        priority={false}
-                      />
-                    ) : (
-                      <div className="flex h-40 w-40 items-center justify-center rounded-3xl bg-gradient-to-br from-[#7b102d] to-[#d4a64a] text-5xl font-black text-white shadow-md">
-                        {(String(supabaseProfile['full_name'] || fullName).trim().charAt(0) || 'C').toUpperCase()}
+                    // Priority order: live preview → freshly uploaded URL → the
+                    // URL saved on the profile row. The initial letter is a
+                    // genuine last resort, used only when all three are empty.
+                    const isPreview = displayAvatarUrl?.startsWith('blob:');
+                    const spinner = photoUploading ? (
+                      <div className="absolute inset-0 flex items-center justify-center rounded-3xl bg-black/45">
+                        <span className="text-xs font-bold text-white">
+                          {photoProgress > 0 && photoProgress < 100 ? `${photoProgress}%` : 'Uploading…'}
+                        </span>
+                      </div>
+                    ) : null;
+
+                    if (!displayAvatarUrl) {
+                      return (
+                        <div className="relative flex h-40 w-40 items-center justify-center rounded-3xl bg-gradient-to-br from-[#7b102d] to-[#d4a64a] text-5xl font-black text-white shadow-md">
+                          {(String(supabaseProfile['full_name'] || fullName).trim().charAt(0) || 'C').toUpperCase()}
+                          {spinner}
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="relative h-40 w-40">
+                        <Image
+                          // Remount on URL change so the browser refetches when
+                          // the local preview is replaced by the stored avatar.
+                          key={displayAvatarUrl}
+                          src={displayAvatarUrl}
+                          alt={String(supabaseProfile['full_name'] || fullName)}
+                          width={160}
+                          height={160}
+                          sizes="160px"
+                          quality={75}
+                          // blob: URLs are already local and already tiny —
+                          // routing them through the image optimizer would only
+                          // add a round trip.
+                          unoptimized={isPreview}
+                          className="h-40 w-40 rounded-3xl object-cover shadow-md ring-2 ring-[#f2d9a8]"
+                          // A saved URL that 404s (or points at a host that is
+                          // not allowlisted) degrades to the initial letter
+                          // rather than a broken-image icon.
+                          onError={() => setAvatarBroken(true)}
+                        />
+                        {spinner}
                       </div>
                     );
                   })()}
@@ -844,6 +979,8 @@ export default function CustomerDashboardPage() {
                     <div className="mt-1 text-sm font-semibold text-[#7b102d]">
                       {[supabaseProfile['age'] ? `${supabaseProfile['age']} yrs` : profile.personal?.dob ? `${calculateAge(profile.personal.dob)} yrs` : null, supabaseProfile['gender'] || profile.personal?.gender].filter(Boolean).join(' • ') || '—'}
                     </div>
+                    {/* No size limit needed — the file is compressed to a few KB
+                        in the browser before it is uploaded. */}
                     <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} />
                     <button
                       type="button"
@@ -851,7 +988,11 @@ export default function CustomerDashboardPage() {
                       disabled={photoUploading}
                       className="mt-3 inline-flex items-center gap-1 rounded-full bg-[#7b102d] px-4 py-1.5 text-xs font-bold text-white hover:bg-[#5a0a1f] disabled:opacity-60"
                     >
-                      {photoUploading ? 'Uploading...' : 'Edit Photo'}
+                      {photoUploading
+                        ? photoProgress > 0 && photoProgress < 100
+                          ? `Compressing ${photoProgress}%`
+                          : 'Uploading…'
+                        : 'Edit Photo'}
                     </button>
                     <Link href="/register/fill-details?step=1" className="mt-1 text-[11px] text-[#6a4a57] underline hover:text-[#7b102d]">Edit details</Link>
                   </div>

@@ -16,7 +16,9 @@
     "e2e:signin": "node scripts/e2e-signin.js",
     "e2e:prod-google": "node scripts/prod-google-check.js",
     "admin:db-setup": "node scripts/admin-db-setup.js",
-    "admin:seed-demo": "node scripts/admin-seed-demo.js"
+    "admin:seed-demo": "node scripts/admin-seed-demo.js",
+    "avatar:storage-setup": "node scripts/avatar-storage-setup.js",
+    "avatar:diag": "node scripts/avatar-diag.js"
   },
   "keywords": [],
   "author": "",
@@ -27,6 +29,7 @@
     "@supabase/ssr": "^0.12.5",
     "@supabase/supabase-js": "^2.112.4",
     "bcryptjs": "^3.0.3",
+    "browser-image-compression": "^2.0.2",
     "cloudinary": "^2.5.1",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",

@@ -51,16 +51,27 @@ const nextConfig = {
         protocol: 'https',
         hostname: '*.supabase.co',
       },
+      // Google OAuth profile pictures. app/auth/callback/route.ts seeds
+      // avatar_url from user_metadata.picture, which is an lh3.googleusercontent.com
+      // URL. Without this entry next/image refuses to render it and the profile
+      // card silently falls back to the initial letter — the exact "photo stuck
+      // on 'A'" symptom. Google rotates between lh1–lh6, hence the wildcard.
+      {
+        protocol: 'https',
+        hostname: '*.googleusercontent.com',
+      },
     ],
   },
-  // Ensure Vercel production build never blocks on lint/type errors
-  // (sqlite3 native build already moved to devDependencies; Supabase is primary DB)
+  // Type errors ARE enforced at build time (this repo passes `npx tsc --noEmit`
+  // clean). The old `typescript.ignoreBuildErrors: true` hid real regressions,
+  // including the broken avatar plumbing that caused this bug in the first
+  // place. Lint runs as a separate `npm run lint` step.
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: false,
   },
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
+  // NOTE: the `eslint` key was removed — Next.js 16 no longer accepts it here
+  // and logs "Unrecognized key(s) in object: 'eslint'" on every boot. Use
+  // `npm run lint` instead.
 };
 
 export default nextConfig;
