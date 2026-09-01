@@ -315,6 +315,8 @@ const CUSTOMER_ACTIVITY_ACTIONS = new Set([
   'PROFILE_PHOTO_CHANGE',
   'PROFILE_PHOTO_REMOVE',
   'PROFILE_UPDATE',
+  'UPLOAD_DOCUMENT',
+  'DELETE_DOCUMENT',
 ]);
 router.post('/activity-log', verifyTokenMiddleware, async (req, res) => {
   try {

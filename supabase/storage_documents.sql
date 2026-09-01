@@ -158,3 +158,55 @@ drop trigger if exists trg_documents_mirror_aliases_after on public.documents;
 create trigger trg_documents_mirror_aliases_after
   after insert or update on public.documents
   for each row execute function public.documents_mirror_aliases_after();
+
+-- ─── 4. Row Level Security on public.documents ───────────────────────────────
+-- The schema comment claimed RLS is OFF, but the live table has
+-- `relrowsecurity = true` with NO policies — every INSERT/SELECT/UPDATE/
+-- DELETE from an authenticated browser client fails with
+-- "new row violates row-level security policy for table documents". That is
+-- what made the direct-fallback path fail in production.
+--
+-- Fix: enable RLS and attach owner-scoped policies. The service-role key
+-- continues to bypass RLS for the Express admin routes.
+do $$
+begin
+  -- Make sure RLS is on (idempotent — `enable` is a no-op when already on).
+  alter table public.documents enable row level security;
+exception when others then null;
+end
+$$;
+
+drop policy if exists "Users can read their own documents"       on public.documents;
+drop policy if exists "Users can insert their own documents"    on public.documents;
+drop policy if exists "Users can update their own documents"    on public.documents;
+drop policy if exists "Users can delete their own documents"    on public.documents;
+
+-- Owner-scoped SELECT. A user may only read rows they wrote.
+create policy "Users can read their own documents"
+  on public.documents for select
+  to authenticated
+  using ((select auth.uid())::text = user_id);
+
+-- Owner-scoped INSERT. The browser client always inserts with the user's
+-- own Supabase session, so this matches the row's user_id to auth.uid().
+create policy "Users can insert their own documents"
+  on public.documents for insert
+  to authenticated
+  with check ((select auth.uid())::text = user_id);
+
+-- Owner-scoped UPDATE.
+create policy "Users can update their own documents"
+  on public.documents for update
+  to authenticated
+  using      ((select auth.uid())::text = user_id)
+  with check ((select auth.uid())::text = user_id);
+
+-- Owner-scoped DELETE — admin Deletes through the service-role key bypass
+-- RLS entirely, so this policy does not affect the audit-logged
+-- `/api/admin/documents/*` paths.
+create policy "Users can delete their own documents"
+  on public.documents for delete
+  to authenticated
+  using ((select auth.uid())::text = user_id);
+
+-- ─── 5. RLS on storage.objects for the documents bucket is set up above. ────

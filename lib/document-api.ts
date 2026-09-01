@@ -164,11 +164,22 @@ export async function uploadDocumentDirect(
 /**
  * Compresses a picked file to the brief's 4-20 KB band and uploads it.
  *
- * Strategy: try the Express upload first (which centralises validation +
- * persistence), and if it returns 5xx / fails before validating (network,
- * multer crashes, HTML error page from the catch-all route) fall back to a
- * direct client-to-Supabase Storage write so the customer is never left
- * staring at an alert dialog.
+ * STRATEGY (revised 2026-09-01 after the production "Request aborted" toast):
+ *
+ *   The Express route is no longer the primary path because Vercel's 10 s
+ *   serverless-function ceiling combined with the Cloudinary CDN replication
+ *   step previously killed the browser fetch mid-upload. We still go to
+ *   Supabase Storage directly — the file is already compressed in the
+ *   browser so the network round-trip is sub-second.
+ *
+ *   1. Try DIRECT upload to Supabase Storage + insert documents row.
+ *      The Supabase JS client signs the upload with the user's anon JWT,
+ *      the bucket is public so getPublicUrl() returns a working URL, and
+ *      the RLS policy `auth.uid() = folder[0]` admits only the owner.
+ *   2. If direct fails (no Supabase session, RLS misconfiguration, network
+ *      error), fall back to the Express route.
+ *   3. Best-effort audit log via `POST /api/customer/activity-log` so the
+ *      admin live-activity feed still sees the upload.
  *
  * Returns the persisted record plus the compression result. The caller can
  * listen to progress via options.onProgress.
@@ -178,10 +189,70 @@ export async function uploadCompressedDocument(
   documentType: DocumentType,
   options: { token?: string | null; onProgress?: (percent: number) => void } = {}
 ): Promise<{ record: CustomerDocument; compressed: CompressedDocument; usedFallback: boolean }> {
-  const token = options.token ?? (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
-  if (!token) throw new Error('Login required');
+  // Compress first so the network payload is small regardless of path.
   const compressed = await compressDocument(file, { onProgress: options.onProgress });
+  options.onProgress?.(50);
 
+  // ── 1) Try DIRECT Supabase path ──────────────────────────────────────────
+  try {
+    const direct = await uploadDocumentDirect(file, documentType, {
+      onProgress: (pct) => options.onProgress?.(Math.max(50, pct)),
+    });
+    options.onProgress?.(95);
+
+    // Best-effort audit log entry — fire-and-forget so the customer's UI
+    // experience is never blocked on the server.
+    try {
+      const token = options.token ?? (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
+      if (token) {
+        fetch('/api/customer/activity-log', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            action: 'UPLOAD_DOCUMENT',
+            detail: `direct upload (${formatBytes(compressed.compressedSize)}) ${documentType}: ${file.name}`,
+          }),
+          keepalive: true,
+        }).catch(() => {});
+      }
+    } catch {
+      /* audit log is best-effort */
+    }
+
+    options.onProgress?.(100);
+    return { record: { ...direct.record, source: 'direct' }, compressed, usedFallback: false };
+  } catch (directErr: any) {
+    const directMessage = directErr?.message || 'Direct upload failed.';
+    // Only fall back if there is a chance the server route will succeed
+    // (i.e., the file is in the size envelope and an auth token exists).
+    const token = options.token ?? (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
+    if (!token) {
+      // No platform JWT — server route cannot authenticate either.
+      throw new Error(`Direct upload failed and no platform session was found. Please sign in again. (${directMessage})`);
+    }
+    options.onProgress?.(70);
+    const { record: serverRecord, compressed: serverCompressed } = await uploadViaServer(file, compressed, documentType, token);
+    options.onProgress?.(100);
+
+    return {
+      record: { ...serverRecord, source: 'server' },
+      compressed: serverCompressed,
+      usedFallback: true,
+    };
+  }
+}
+
+/**
+ * Server-route upload used only as a fallback when the direct path fails.
+ * Wraps the round-trip in structured-JSON reading so the same code never
+ * silently bubbles HTML into a toast.
+ */
+async function uploadViaServer(
+  file: File,
+  compressed: CompressedDocument,
+  documentType: DocumentType,
+  token: string
+): Promise<{ record: CustomerDocument; compressed: CompressedDocument }> {
   const fd = new FormData();
   const uploadBlob =
     compressed.file instanceof File
@@ -190,55 +261,47 @@ export async function uploadCompressedDocument(
   fd.append('file', uploadBlob);
   fd.append('documentType', documentType);
 
-  let serverError: string | null = null;
+  let res: Response;
   try {
-    const res = await fetch('/api/documents/upload', {
+    // 25s ceiling — past this the upload is almost certainly stalled on
+    // Vercel's serverless ceiling anyway, and we'd rather see the toast.
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 25_000);
+    res = await fetch('/api/documents/upload', {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
       body: fd,
+      signal: ctrl.signal,
     });
-    const parsed = await readJsonError(res, 'Upload failed');
-    if (parsed.ok) {
-      const f = parsed.json.file || parsed.json;
-      const record: CustomerDocument = {
-        id: f.id,
-        name: f.originalName || compressed.fileName,
-        uploadedAt: f.uploadedAt || Date.now(),
-        status: f.status || 'Pending Review',
-        documentType: f.documentType || documentType,
-        rejectionReason: f.rejectionReason || null,
-        size: f.size || compressed.compressedSize,
-        mimetype: f.mimetype || compressed.mimeType,
-        source: 'server',
-      };
-      return { record, compressed, usedFallback: false };
-    }
-    serverError = parsed.error;
-  } catch (err: any) {
-    serverError = err?.message || 'Network error talking to the server.';
+    clearTimeout(timeout);
+  } catch (networkErr: any) {
+    // Network / abort paths get a clearer message than the generic
+    // "Request aborted" the browser ships by default.
+    const aborted = networkErr?.name === 'AbortError' || /abort/i.test(networkErr?.message || '');
+    throw new Error(aborted
+      ? 'Upload timed out. The server is taking too long to respond — please retry with a smaller file.'
+      : `Network error talking to the server: ${networkErr?.message || 'unknown'}`);
   }
 
-  // Server route failed with something other than a 4xx client error — fall
-  // back to direct upload so the customer doesn't lose their docs.
-  const looksLikeClientError = serverError && /\b400\b|\b401\b|\b403\b|\b404\b|\b415\b|\b413\b/.test(serverError);
-  if (looksLikeClientError) {
-    // Don't fall back on validation errors — re-throw so the user fixes the input.
-    throw new Error(serverError || 'Upload rejected by the server.');
+  const parsed = await readJsonError(res, 'Server rejected the upload.');
+  if (!parsed.ok) {
+    throw new Error(parsed.error);
   }
-
-  try {
-    options.onProgress?.(80);
-    const direct = await uploadDocumentDirect(file, documentType, { onProgress: options.onProgress });
-    return { ...direct, usedFallback: true };
-  } catch (fallbackErr: any) {
-    // Surface both messages — server's root cause plus fallback's
-    // downstream failure gives the customer enough context to file a
-    // useful bug report.
-    const detail = fallbackErr?.message || 'Direct fallback failed.';
-    throw new Error(serverError
-      ? `Server rejected the upload: ${serverError}. Direct fallback also failed: ${detail}`
-      : detail);
-  }
+  const f = parsed.json.file || parsed.json;
+  return {
+    record: {
+      id: f.id,
+      name: f.originalName || compressed.fileName,
+      uploadedAt: f.uploadedAt || Date.now(),
+      status: f.status || 'Pending Review',
+      documentType: f.documentType || documentType,
+      rejectionReason: f.rejectionReason || null,
+      size: f.size || compressed.compressedSize,
+      mimetype: f.mimetype || compressed.mimeType,
+      source: 'server',
+    },
+    compressed,
+  };
 }
 
 function authHeaders(): Record<string, string> {

@@ -66,7 +66,11 @@ function createMulterForUser(userId) {
 }
 
 // controller used by route: router.post('/upload', verifyTokenMiddleware, upload.single('file'), uploadDocument)
-// All image/photo/PDF/document uploads are routed through Cloudinary when configured.
+// Local disk + Supabase PostgreSQL are the canonical store. Cloudinary is
+// optional — if configured, we replicate the file there AFTER responding to
+// the browser so a slow Cloudinary round-trip can never abort the user-visible
+// request (Vercel serverless functions have a 10 s ceiling on the hobby tier,
+// and Cloudinary's auto-format/quality transformations can easily exceed it).
 async function uploadDocument(req, res) {
   try {
     if (!req.file) {
@@ -89,24 +93,16 @@ async function uploadDocument(req, res) {
       detail: `user uploaded ${docType}: ${req.file.originalname} (${req.file.size} bytes)`,
     }).catch(() => {});
 
-    // Upload to Cloudinary when configured (images, photos, PDFs, docs)
-    let cloudinaryResult = null;
-    if (isCloudinaryConfigured()) {
-      try {
-        cloudinaryResult = await uploadToCloudinary(req.file.path, `shubh-sanjog/documents/${docType}`);
-      } catch (e) {
-        console.warn('cloudinary upload failed for document, using local:', e.message);
-      }
-    }
-
+    // Meta first — without Cloudinary so far. We respond to the browser BEFORE
+    // the (potentially slow) Cloudinary round-trip; the CDN replication runs
+    // in the background and updates the document row in place when complete.
     const meta = {
       id,
       userId: req.user.id,
       originalName: req.file.originalname,
-      path: cloudinaryResult?.secure_url || req.file.path,
-      // Cloudinary fields — persisted to Supabase when available
-      cloudinaryUrl: cloudinaryResult?.secure_url || null,
-      cloudinaryPublicId: cloudinaryResult?.public_id || null,
+      path: req.file.path,
+      cloudinaryUrl: null,
+      cloudinaryPublicId: null,
       mimetype: req.file.mimetype,
       size: req.file.size,
       uploadedAt: Date.now(),
@@ -114,7 +110,8 @@ async function uploadDocument(req, res) {
       documentType: docType,
     };
     store.documents.set(id, meta);
-    // persist to db (Supabase PostgreSQL primary)
+
+    // Persist to DB synchronously so the response is sourced from one place.
     try {
       if (db._db) await db.saveDocument(db._db, meta);
     } catch (e) {
@@ -128,13 +125,45 @@ async function uploadDocument(req, res) {
       });
     }
 
-    // Success — return both shapes (legacy + new) for client compatibility.
-    return res.json({
+    // Respond immediately so a slow Cloudinary round-trip can never abort the
+    // browser fetch (which on Vercel serverless is what produced the
+    // "Request aborted" toast in production).
+    res.json({
       success: true,
       ok: true,
       file: meta,
       record: meta,
     });
+
+    // Background Cloudinary replication. Fire-and-forget so a Cloudinary
+    // outage cannot block uploads; the persisted row already has
+    // `path = req.file.path` so the document is fully usable without CDN.
+    if (isCloudinaryConfigured()) {
+      const localPath = req.file.path;
+      const originalName = req.file.originalname;
+      (async () => {
+        try {
+          const result = await uploadToCloudinary(localPath, `shubh-sanjog/documents/${docType}`);
+          if (result && result.secure_url) {
+            const updated = {
+              ...store.documents.get(id),
+              path: result.secure_url,
+              cloudinaryUrl: result.secure_url,
+              cloudinaryPublicId: result.public_id,
+            };
+            store.documents.set(id, updated);
+            try {
+              if (db._db) await db.saveDocument(db._db, updated);
+            } catch (e) {
+              console.warn('cloudinary metadata update failed', e?.message);
+            }
+            console.log(`[documents] cloudinary replication complete for ${originalName}`);
+          }
+        } catch (e) {
+          console.warn('[documents] cloudinary replication failed (non-fatal):', e.message);
+        }
+      })();
+    }
   } catch (err) {
     console.error('uploadDocument', err);
     return res.status(500).json({
