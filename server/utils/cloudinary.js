@@ -10,7 +10,7 @@ let _configured = false;
 
 function isCloudinaryConfigured() {
   return Boolean(
-    process.env.CLOUDINARY_CLOUD_NAME &&
+    (process.env.CLOUDINARY_CLOUD_NAME || process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME) &&
       process.env.CLOUDINARY_API_KEY &&
       process.env.CLOUDINARY_API_SECRET
   );
@@ -19,9 +19,10 @@ function isCloudinaryConfigured() {
 function ensureConfigured() {
   if (_configured || !isCloudinaryConfigured()) return;
   cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME || process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME,
     api_key: process.env.CLOUDINARY_API_KEY,
     api_secret: process.env.CLOUDINARY_API_SECRET,
+    secure: true,
   });
   _configured = true;
 }
@@ -41,6 +42,23 @@ async function uploadToCloudinary(localPath, folder = 'shubh-sanjog') {
       resource_type: 'auto',
       use_filename: true,
       unique_filename: true,
+      // Automatic image optimization and face alignment for profile photos
+      format: 'auto',
+      quality: 'auto',
+      gravity: 'face',
+      crop: folder.includes('profiles') || folder.includes('avatar') ? 'thumb' : 'fill',
+      fetch_format: 'auto',
+      flags: 'progressive',
+      transformation: [
+        {
+          width: folder.includes('profiles') || folder.includes('avatar') ? 500 : 800,
+          height: folder.includes('profiles') || folder.includes('avatar') ? 500 : 800,
+          crop: folder.includes('profiles') || folder.includes('avatar') ? 'thumb' : 'fill',
+          gravity: 'face',
+          quality: 'auto',
+          fetch_format: 'auto',
+        },
+      ],
     });
     // Optionally remove local temp file after successful cloud upload in production.
     // Keep it for now so existing DB paths remain valid as fallback.

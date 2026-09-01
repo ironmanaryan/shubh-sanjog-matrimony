@@ -372,18 +372,38 @@ function FillDetailsInner() {
     try {
       const supabase = getSupabase()!;
       let photoUrl: string | null = null;
+      let cloudinaryPublicId: string | null = null;
       if (form.photoFile) {
         try {
-          const filePath = `${userId}/${Date.now()}-${form.photoFile.name}`;
-          const { error: uploadError } = await supabase.storage.from('profiles').upload(filePath, form.photoFile, { upsert: true });
-          if (!uploadError) {
-            const { data: urlData } = supabase.storage.from('profiles').getPublicUrl(filePath);
-            photoUrl = urlData.publicUrl;
-          } else {
-            const { error: err2 } = await supabase.storage.from('avatars').upload(filePath, form.photoFile, { upsert: true });
-            if (!err2) {
-              const { data: urlData2 } = supabase.storage.from('avatars').getPublicUrl(filePath);
-              photoUrl = urlData2.publicUrl;
+          // Primary: Cloudinary upload with auto optimization and face alignment
+          // Uses: format:auto, quality:auto, gravity:face, crop:fill/thumb
+          const cloudForm = new FormData();
+          cloudForm.append('file', form.photoFile);
+          cloudForm.append('folder', 'shubh-sanjog/profiles');
+          const cloudRes = await fetch('/api/upload', {
+            method: 'POST',
+            body: cloudForm,
+          });
+          if (cloudRes.ok) {
+            const cloudData = (await cloudRes.json()) as { secure_url?: string; public_id?: string };
+            if (cloudData.secure_url) {
+              photoUrl = cloudData.secure_url;
+              cloudinaryPublicId = cloudData.public_id || null;
+            }
+          }
+          // Fallback: Supabase Storage if Cloudinary fails or not configured
+          if (!photoUrl) {
+            const filePath = `${userId}/${Date.now()}-${form.photoFile.name}`;
+            const { error: uploadError } = await supabase.storage.from('profiles').upload(filePath, form.photoFile, { upsert: true });
+            if (!uploadError) {
+              const { data: urlData } = supabase.storage.from('profiles').getPublicUrl(filePath);
+              photoUrl = urlData.publicUrl;
+            } else {
+              const { error: err2 } = await supabase.storage.from('avatars').upload(filePath, form.photoFile, { upsert: true });
+              if (!err2) {
+                const { data: urlData2 } = supabase.storage.from('avatars').getPublicUrl(filePath);
+                photoUrl = urlData2.publicUrl;
+              }
             }
           }
         } catch (e) { console.warn('photo upload failed', e); }
