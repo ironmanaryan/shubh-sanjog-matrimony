@@ -27,7 +27,12 @@ export async function POST(request: NextRequest) {
     }
 
     if (!cloudName || !apiKey || !apiSecret) {
-      return NextResponse.json({ error: 'Cloudinary not configured' }, { status: 500 });
+      console.error('[api/upload] cloudinaryError: Missing Cloudinary env vars', {
+        cloudName: !!cloudName,
+        apiKey: !!apiKey,
+        apiSecret: !!apiSecret,
+      });
+      return NextResponse.json({ error: 'Cloudinary not configured - missing env vars' }, { status: 500 });
     }
 
     // Validate file type
@@ -86,9 +91,17 @@ export async function POST(request: NextRequest) {
       { status: 200 }
     );
   } catch (error) {
-    console.error('[api/upload] Cloudinary upload failed:', error);
+    // Proper error logging so Vercel logs show exact Cloudinary rejection (bad signature, timeout, etc.)
+    const cloudinaryError = error as { message?: string; http_code?: number; name?: string; error?: unknown };
+    console.error('[api/upload] cloudinaryError:', {
+      message: cloudinaryError?.message || String(error),
+      http_code: cloudinaryError?.http_code,
+      name: cloudinaryError?.name,
+      stack: error instanceof Error ? error.stack : undefined,
+      fullError: JSON.stringify(error, Object.getOwnPropertyNames(error as object)),
+    });
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Upload failed' },
+      { error: cloudinaryError?.message || (error instanceof Error ? error.message : 'Upload failed'), details: String(error) },
       { status: 500 }
     );
   }
