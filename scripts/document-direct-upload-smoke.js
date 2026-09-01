@@ -81,56 +81,87 @@ async function main() {
     const head = await fetch(pub.publicUrl, { method: 'HEAD' });
     step('public URL reachable without auth', head.ok, `${pub.publicUrl.slice(0, 80)}... status=${head.status}`);
 
-    // 3. The lazy-upsert path from `lib/document-api.ts::ensureUserRow`.
+    // 3. The lazy-upsert path from `lib/document-api.ts::ensureProfileRow`
+    //    and `ensureUserRow`.
     //
     //    `lib/document-api.ts` is a browser-only TypeScript module that
     //    imports `getSupabase` from `lib/supabase.ts`. We can't import
     //    those from a Node smoke test without a TS toolchain, so the
-    //    smoke test re-implements the same three calls (select, upsert)
-    //    using the same payload. The ASSERTION still tells us whether the
-    //    upsert works against the live database.
-    const { data: stillEmpty } = await userClient.from('users').select('id').eq('id', userId).maybeSingle();
-    step('users row is still empty before the lazy upsert', !stillEmpty?.id);
+    //    smoke test re-implements the same calls (select + upsert) using
+    //    the same payload shapes the production helper uses. The
+    //    ASSERTION still tells us whether each upsert actually lands
+    //    against the live database.
+    const { data: stillEmptyUsers } = await userClient
+      .from('users').select('id').eq('id', userId).maybeSingle();
+    step('users row is still empty before the lazy upsert', !stillEmptyUsers?.id);
+
+    const { data: stillEmptyProfiles } = await userClient
+      .from('profiles').select('id').eq('id', userId).maybeSingle();
+    step('profiles row is still empty before the lazy upsert', !stillEmptyProfiles?.id);
 
     const { data: { user: authedUser } } = await userClient.auth.getUser();
-    const meta = authedUser.user_metadata || {};
-    const upsertPayload = {
+
+    // Validate `authedUser.id` the same way the production handler does:
+    // reject empty / 'undefined' / 'null' strings so the downstream
+    // documents INSERT never goes out with an invalid `user_id`.
+    const validatedId = (authedUser.id || '').trim();
+    step('user id is non-empty and not "undefined"/"null"',
+      !!validatedId && !/^undefined$/i.test(validatedId) && !/^null$/i.test(validatedId),
+      `id=${validatedId.slice(0, 12)}…`);
+
+    // Mirrors `ensureProfileRow` in lib/document-api.ts:
+    //   { id, email, full_name: user.user_metadata?.full_name || 'User' }
+    const profileFullName =
+      (typeof authedUser.user_metadata?.full_name === 'string' &&
+        authedUser.user_metadata.full_name.trim()) || 'User';
+    const profilesPayload = {
       id: authedUser.id,
-      identifier: authedUser.id, // mirrors the production implementation
+      email: authedUser.email || null,
+      full_name: profileFullName,
+    };
+
+    // 4. The brief's PRIMARY upsert — into `profiles` — must succeed and
+    //    unblock the documents FK.
+    if (profilesTablePresent) {
+      const { error: profilesErr } = await userClient
+        .from('profiles')
+        .upsert(profilesPayload, { onConflict: 'id', ignoreDuplicates: false });
+      step('lazy upsert into public.profiles succeeded',
+        !profilesErr, profilesErr ? profilesErr.message : `id=${profilesPayload.id} full_name="${profilesPayload.full_name}"`);
+
+      // Confirm the row is actually in the DB with the fields we sent.
+      const { data: profilesRow } = await userClient
+        .from('profiles').select('id, email, full_name').eq('id', userId).maybeSingle();
+      step('profiles row readable after upsert with the expected payload',
+        !!profilesRow && profilesRow.email === profilesPayload.email && profilesRow.full_name === profilesPayload.full_name,
+        profilesRow ? `email=${profilesRow.email} full_name="${profilesRow.full_name}"` : 'row missing');
+    } else {
+      console.log('SKIP  profiles table absent on this project (legacy / not yet migrated)');
+    }
+
+    // 5. SECONDARY upsert into `users` — covers installs where the FK on
+    //    documents.user_id points at users(id) instead of profiles(id).
+    const meta = authedUser.user_metadata || {};
+    const usersPayload = {
+      id: authedUser.id,
+      identifier: authedUser.id,
       email: authedUser.email || null,
       full_name: (typeof meta.full_name === 'string' && meta.full_name) || (typeof meta.name === 'string' && meta.name) || (authedUser.email ? authedUser.email.split('@')[0] : ''),
       role: 'customer',
       created_at: Date.now(),
     };
-    const { error: upsertErr } = await userClient
+    const { error: usersErr } = await userClient
       .from('users')
-      .upsert(upsertPayload, { onConflict: 'id', ignoreDuplicates: false });
-    step('lazy upsert into public.users succeeded', !upsertErr, upsertErr ? upsertErr.message : `id=${upsertPayload.id}`);
+      .upsert(usersPayload, { onConflict: 'id', ignoreDuplicates: false });
+    step('lazy upsert into public.users succeeded',
+      !usersErr, usersErr ? usersErr.message : `id=${usersPayload.id}`);
 
-    // Best-effort: also upsert into `profiles` if the table exists. Some
-    // schemas (legacy / brand-new deploys) have only one of the two tables,
-    // and the FK on documents.user_id may point at either. The production
-    // helper does both via `Promise.all`; this smoke mirrors that.
-    if (profilesTablePresent) {
-      const profilesPayload = {
-        id: authedUser.id,
-        user_id: authedUser.id,
-        email: authedUser.email || null,
-        full_name: (typeof meta.full_name === 'string' && meta.full_name) || (typeof meta.name === 'string' && meta.name) || (authedUser.email ? authedUser.email.split('@')[0] : ''),
-        created_at: new Date().toISOString(),
-      };
-      const { error: profilesErr } = await userClient
-        .from('profiles')
-        .upsert(profilesPayload, { onConflict: 'id', ignoreDuplicates: false });
-      step('lazy upsert into public.profiles succeeded (or row already existed)',
-        !profilesErr, profilesErr ? profilesErr.message : `id=${profilesPayload.id}`);
-    } else {
-      console.log('SKIP  profiles table absent on this project (legacy / not yet migrated)');
-    }
-
-    // 4. Now that users(id) is populated, the documents INSERT must
-    //    succeed without FK violation.
+    // 6. Now that the parent table (profiles or users) is populated, the
+    //    documents INSERT must succeed without FK violation. `user_id` is
+    //    the validated id from above — never undefined / empty / "undefined".
     const id = `smoke-${userId}-${Date.now()}`;
+    step('documents INSERT will use a valid, non-empty user_id',
+      !!userId && userId !== 'undefined' && userId !== 'null', `user_id=${userId}`);
     const { data: ins, error: insErr } = await userClient
       .from('documents')
       .insert({
@@ -145,9 +176,16 @@ async function main() {
         status: 'Pending Review',
         uploaded_at: Date.now(),
       })
-      .select('id, doc_type, file_url, created_at, status')
+      .select('id, user_id, doc_type, file_url, created_at, status')
       .single();
-    step('documents INSERT succeeded (FK on users satisfied)', !insErr && ins?.id === id, insErr ? insErr.message : `id=${ins?.id}`);
+    step('documents INSERT succeeded (FK on auth-uid tables satisfied)',
+      !insErr && ins?.id === id,
+      insErr ? insErr.message : `id=${ins?.id} user_id=${ins?.user_id}`);
+    // Defense-in-depth: the row we just wrote must echo the validated id
+    // back so an "empty user_id" regression (where the schema treats
+    // '' as a valid fk target) cannot pass this test.
+    step('documents row stored user_id matching the validated id',
+      ins?.user_id === userId, `stored=${ins?.user_id} expected=${userId}`);
 
     // 5. The aliases must have been populated by the BEFORE trigger.
     step('triggers filled doc_type / file_url / created_at', ins?.doc_type === 'identity' && !!ins?.file_url && !!ins?.created_at,

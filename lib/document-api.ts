@@ -86,22 +86,44 @@ export async function uploadDocumentDirect(
   if (!user) throw new Error('Sign in before uploading.');
   if (!user.id) throw new Error('Authenticated user has no id — please sign out and sign back in.');
 
+  // ── Validate the user id ──────────────────────────────────────────────────
+  // The `documents.user_id` column has a foreign-key constraint. The FK
+  // target is the Supabase auth uid string. Reject any falsy value BEFORE
+  // we issue any DB call so the documents INSERT can never go out with an
+  // undefined or empty `user_id` (which Postgres rejects as 23502, not
+  // 23503, and would mask the real FK violation).
+  const userId = (user.id || '').trim();
+  if (!userId) {
+    throw new Error('Authenticated user has an empty id — please sign out and sign back in.');
+  }
+  // Also reject the literal string "undefined" that older Supabase SDK
+  // versions surfaced when the JWT was missing. Anything non-empty that
+  // isn't a Supabase auth uid would still trip the FK, but this catches
+  // the degenerate case from leaking into the INSERT.
+  if (/^undefined$/i.test(userId) || /^null$/i.test(userId)) {
+    throw new Error('Authenticated user id is invalid — please sign out and sign back in.');
+  }
+
   const compressed = await compressDocument(file, { onProgress: options.onProgress });
 
-  // ── Ensure the `users` row exists ─────────────────────────────────────────
-  // `documents.user_id` has a FK pointing at `users(id)`. The Express auth
-  // flow populates that row on session exchange, but a customer who signs in
-  // purely through the browser (a normal Google sign-in lands here before any
-  // `/api/auth/supabase-session` call has happened) can hit Supabase Storage
-  // + Storage RLS with a real auth.uid() while `users(id)` is still empty.
-  // The downstream INSERT then dies with `violates foreign key constraint
-  // "documents_user_id_fkey"`. Proactive upsert avoids the whole class.
+  // ── Ensure a `profiles` row exists for userId ─────────────────────────────
+  // `documents.user_id` has a FK pointing at `users(id)` (current production
+  // schema) or, on installs where the column was retargeted, `profiles(id)`.
+  // Either way the Supabase auth uid is the row's PK. The Express auth flow
+  // populates `users` on session exchange, but a customer who signs in
+  // purely through the browser (normal Google OAuth) lands here before any
+  // `/api/auth/supabase-session` call, so neither `users(id)` nor
+  // `profiles(id)` is populated yet. The downstream INSERT then dies with
+  // `violates foreign key constraint "documents_user_id_fkey"`. Proactive
+  // upsert avoids the whole class.
   //
-  // `users.id` is the Supabase auth user id, so the upsert is idempotent:
-  // re-runs are no-ops. RLS is OFF on public.users (per `supabase/schema.sql`)
-  // so the browser-side client can write directly with the user's JWT.
+  // We upsert BOTH tables to satisfy whichever one the live FK actually
+  // points at. Both writes are idempotent (`onConflict: 'id'`) and safe to
+  // call on every upload.
   options.onProgress?.(60);
-  await ensureUserRow(supabase, user);
+  const userForRow = { ...user, id: userId };
+  await ensureProfileRow(supabase, userForRow);
+  await ensureUserRow(supabase, userForRow);
 
   // Build the upload payload — bytes + filename + mimetype.
   const uploadPayload =
@@ -110,7 +132,7 @@ export async function uploadDocumentDirect(
       : new File([compressed.file], compressed.fileName, { type: compressed.mimeType });
 
   const ext = (compressed.fileName.split('.').pop() || 'bin').toLowerCase();
-  const objectPath = `${user.id}/${Date.now()}.${ext}`;
+  const objectPath = `${userId}/${Date.now()}.${ext}`;
   options.onProgress?.(80);
 
   // Supabase JS upload. Throws on RLS denial / network errors; the caller
@@ -134,10 +156,10 @@ export async function uploadDocumentDirect(
   // Insert the database row using the same column set the server uses, so the
   // admin panel and customer dashboard render it consistently.
   const now = Date.now();
-  // Use the SAME user.id string for every FK reference (documents.user_id,
+  // Use the SAME `userId` string for every FK reference (documents.user_id,
   // documents-related tables downstream). It came from supabase.auth.getUser()
-  // and is therefore the canonical Supabase auth uid.
-  const userId = user.id;
+  // and is therefore the canonical Supabase auth uid. We already validated
+  // above that it's a non-empty, non-"undefined"/"null" string.
   const insertPayload = {
     id: (typeof crypto !== 'undefined' && crypto.randomUUID)
       ? crypto.randomUUID()
@@ -189,76 +211,126 @@ export async function uploadDocumentDirect(
  */
 type SupabaseClient = ReturnType<typeof getSupabase>;
 
+type AuthedUser = {
+  id: string;
+  email?: string | null;
+  user_metadata?: Record<string, unknown> | null;
+};
+
 /**
- * Upsert the `users` row (and the parallel `profiles` row if it exists) for a
- * freshly authenticated browser session.
+ * Upsert the `profiles` row for a freshly authenticated browser session.
  *
- * The historical Express auth flow writes to `public.users` via
- * `db.createUser()` inside `resolveUserFromSupabaseIdentity`. A user who
- * signs in solely through the browser (typical Google OAuth flow before
- * `POST /api/auth/supabase-session` lands) lands in Supabase Auth but never
- * touches the Express server, so `users(id)` is empty when they try to
- * upload a document. Without this upsert the documents INSERT fails with:
+ * The `profiles` table (`supabase/profiles_migration.sql`) has `id text
+ * primary key` where `id = Supabase auth uid`. Some installs retarget the
+ * `documents.user_id` foreign key at `profiles(id)` instead of `users(id)`.
+ * Either way, populating the row before the documents INSERT defeats the
+ * `documents_user_id_fkey` violation that surfaced when a customer signed
+ * in purely through the browser (no Express `/api/auth/supabase-session`
+ * call has populated the row yet).
  *
- *   "insert or update on table 'documents' violates foreign key constraint
- *    'documents_user_id_fkey'"
+ * The payload is the explicit shape prescribed for this fix:
  *
- * The `id` column on `public.users` (and `public.profiles`, if it exists)
- * IS the Supabase auth uid, so the upsert is idempotent — running it on
- * every upload is safe. We only set fields that are missing so we never
- * overwrite admin-side edits (role, deleted_at, etc.).
+ *   { id: user.id, email: user.email,
+ *     full_name: user.user_metadata?.full_name || 'User' }
  *
- * We attempt BOTH tables in case the live schema's FK has been re-targeted
- * at `profiles(id)` (some Supabase projects use profiles as the primary
- * table; some use users). Either path satisfies the FK on
- * `documents.user_id` because both tables share the same `id` (= Supabase
- * auth uid) PK layout.
+ * The `'User'` fallback keeps `full_name` non-null so any NOT NULL or
+ * CHECK constraint on the column is satisfied. `id` is the validated
+ * `userId` (non-empty, non-'undefined', non-'null') from the caller.
+ * RLS is OFF on `public.profiles` so the browser-side client can write
+ * directly with the user's JWT.
+ *
+ * The upsert is idempotent (`onConflict: 'id'`) — re-runs on every
+ * upload are safe and a no-op when the row already exists.
+ */
+async function ensureProfileRow(
+  supabase: NonNullable<SupabaseClient>,
+  user: AuthedUser
+): Promise<void> {
+  // 1. Check the row first. If it already exists we skip the write
+  //    entirely — saves a round trip and avoids overwriting admin-side
+  //    edits to `is_completed`, `dob`, etc.
+  const { data: existing, error: readErr } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('id', user.id)
+    .maybeSingle();
+  // "relation does not exist" (the migration wasn't applied) is
+  // tolerated — the parallel `ensureUserRow` call covers the FK, so
+  // we can return silently here.
+  if (readErr) {
+    if (!/does not exist/i.test(readErr.message || '')) {
+      // Non-fatal warning: the INSERT below will surface a real failure
+      // if the FK is genuinely unsatisfied.
+      console.warn('[documents] profiles SELECT skipped:', readErr.message);
+    }
+    return;
+  }
+  if (existing?.id) return;
+
+  // 2. Exact payload shape required by the brief.
+  const metadata = (user.user_metadata || {}) as Record<string, unknown>;
+  const rawFullName = metadata.full_name;
+  const fullName =
+    typeof rawFullName === 'string' && rawFullName.trim()
+      ? rawFullName.trim()
+      : 'User';
+
+  const payload = {
+    id: user.id,
+    email: user.email || null,
+    full_name: fullName,
+  };
+
+  const { error: upsertErr } = await supabase
+    .from('profiles')
+    .upsert(payload, { onConflict: 'id', ignoreDuplicates: false });
+
+  if (upsertErr) {
+    const msg = upsertErr.message || '';
+    // Duplicate-key = a parallel request raced us into the row; quiet win.
+    // "relation does not exist" / schema-cache races = non-fatal here too,
+    // because the parallel `ensureUserRow` covers the FK.
+    if (
+      !/duplicate key/i.test(msg) &&
+      !/does not exist/i.test(msg) &&
+      !/relation.*not found/i.test(msg)
+    ) {
+      console.warn('[documents] profiles upsert skipped:', msg);
+    }
+  }
+}
+
+/**
+ * Upsert the parallel `users` row (legacy / FK-alternate target).
+ *
+ * Kept alongside `ensureProfileRow` because some installs have the FK on
+ * `documents.user_id` pointing at `users(id)` (`supabase/schema.sql:57`),
+ * others have it pointing at `profiles(id)`. Doing both writes means the
+ * FK is satisfied regardless of which table the live schema targets.
+ *
+ * The `id` column on `public.users` IS the Supabase auth uid, so the
+ * upsert is idempotent — running it on every upload is safe. We only set
+ * fields that are missing so we never overwrite admin-side edits (role,
+ * deleted_at, etc.).
  */
 async function ensureUserRow(
   supabase: NonNullable<SupabaseClient>,
-  user: { id: string; email?: string | null; user_metadata?: Record<string, unknown> | null }
+  user: AuthedUser
 ): Promise<void> {
-  const metadata = (user.user_metadata || {}) as Record<string, unknown>;
-  const fullName =
-    (typeof metadata.full_name === 'string' && metadata.full_name.trim()) ||
-    (typeof metadata.name === 'string' && metadata.name.trim()) ||
-    (user.email ? user.email.split('@')[0] : '');
-
-  // `identifier` is the legacy unique column on `public.users`. We set it
-  // to the same string as `id` for browser-side sign-ups so the unique
-  // constraint holds even if the user later goes through the Express flow
-  // (which would issue a different identifier). PostgreSQL unique indexes
-  // do NOT collide when the value is the same as `id`, because `id` itself
-  // is text PK.
-  const usersPayload = {
-    id: user.id,
-    identifier: user.id,
-    email: user.email || null,
-    full_name: fullName || null,
-    role: 'customer',
-    created_at: Date.now(),
-  };
-
-  // `profiles` (separate table created in `supabase/profiles_migration.sql`)
-  // has its own `id` PK and a mirroring `user_id` column. We only set rows on
-  // insert — never overwrite admin-side edits to `is_completed`, `dob`,
-  // etc. — because customers fill out their profile via the post-OAuth form
-  // and we don't want a re-upload to clobber the work.
-  const profilesPayload = {
-    id: user.id,
-    user_id: user.id,
-    email: user.email || null,
-    full_name: fullName || null,
-    created_at: new Date().toISOString(),
-  };
-
-  // Run both upserts. The duplicates are tolerated silently; if a column
-  // is missing we ignore the error so we don't break older schemas that
-  // haven't been migrated yet.
-  await Promise.all([
-    safeUpsert(supabase, 'users', usersPayload, 'id'),
-    safeUpsert(supabase, 'profiles', profilesPayload, 'id'),
-  ]);
+  await safeUpsert(
+    supabase,
+    'users',
+    {
+      id: user.id,
+      identifier: user.id,
+      email: user.email || null,
+      full_name:
+        ((user.user_metadata as Record<string, unknown> | null)?.full_name as string | undefined) || null,
+      role: 'customer',
+      created_at: Date.now(),
+    },
+    'id'
+  );
 }
 
 /**
