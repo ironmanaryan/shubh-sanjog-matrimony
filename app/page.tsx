@@ -183,8 +183,8 @@ export default async function HomePage() {
         <div aria-hidden="true" className="absolute -right-24 bottom-8 h-80 w-80 rounded-full bg-royal/10 blur-3xl" />
         <div aria-hidden="true" className="absolute inset-x-0 bottom-0 h-px gold-rule opacity-70" />
 
-        {/* Responsive grid: 1 col mobile, 12-col desktop (6+6) with vertical centering */}
-        <div className="relative mx-auto grid max-w-7xl grid-cols-1 items-center gap-8 px-4 pb-10 pt-8 sm:gap-12 sm:px-6 sm:pb-16 sm:pt-14 lg:grid-cols-12 lg:gap-12 lg:pb-24 lg:pt-24 xl:gap-14">
+        {/* Responsive grid: tight desktop spacing to clear header without massive white void */}
+        <div className="relative mx-auto grid max-w-7xl grid-cols-1 items-center gap-8 px-4 pb-10 pt-8 sm:gap-12 sm:px-6 sm:pb-16 sm:pt-14 lg:grid-cols-12 lg:gap-10 lg:pb-12 lg:pt-12 xl:gap-14">
           {/* Left column — copy (text first on mobile, 6 cols desktop) */}
           <div className="order-1 flex flex-col justify-center lg:col-span-6 lg:order-1">
             <Reveal>
