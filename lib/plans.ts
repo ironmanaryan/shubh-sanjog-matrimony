@@ -1,4 +1,3 @@
-import path from 'path';
 import { cache } from 'react';
 
 // Server-only reader for the membership_plans — Supabase PostgreSQL primary,
@@ -18,7 +17,11 @@ export type MembershipPlan = {
   popular: boolean;
 };
 
-const DB_PATH = path.join(process.cwd(), 'server', 'data', 'database.sqlite');
+// Local SQLite fallback removed for Vercel serverless: Supabase is sole
+// primary DB. Previous `server/data/database.sqlite` via `sqlite`/`sqlite3`
+// required native node-gyp compilation which bloats/hangs Vercel deploys.
+// `server/db-sqlite.js` is retained for local dev only and is never bundled
+// into the Next.js frontend (devDependencies excluded from Vercel install).
 
 // Stale-while-revalidate cache. Membership plans almost never change mid-day;
 // caching for 60s drops the per-request Supabase round trip while keeping
@@ -73,39 +76,11 @@ async function readPlansFromSource(): Promise<MembershipPlan[]> {
       }
     }
   } catch {
-    // fall through to SQLite
+    // fall through to seed catalog
   }
 
-  // 2) SQLite fallback (local dev)
-  try {
-    const { open } = await import('sqlite');
-    const sqlite3 = await import('sqlite3');
-    const db = await open({ filename: DB_PATH, driver: sqlite3.default.Database });
-    try {
-      const rows = await db.all(
-        `SELECT * FROM membership_plans WHERE active = 1 ORDER BY sortOrder ASC`
-      );
-      return rows.map((row) => ({
-        tier: row.tier,
-        name: row.name,
-        price: Number(row.price),
-        durationDays: Number(row.durationDays),
-        meetingsAllowed: Number(row.meetingsAllowed),
-        profilesMin: Number(row.profilesMin || 0),
-        profilesMax: Number(row.profilesMax || 0),
-        priorityAssistance: row.priorityAssistance === 1,
-        description: row.description || '',
-        features: row.features ? JSON.parse(row.features) : [],
-        popular: row.popular === 1,
-      }));
-    } finally {
-      await db.close();
-    }
-  } catch {
-    // fall through to seed
-  }
-
-  // 3) Seed catalog fallback so public page always renders contract tiers
+  // 2) Seed catalog fallback so public page always renders contract tiers
+  // (SQLite fallback removed - Supabase primary, no native sqlite3 on Vercel)
   const { MEMBERSHIP_PACKAGES } = await import('../server/data/plan-catalog');
   return Object.values(MEMBERSHIP_PACKAGES).map((plan) => ({
     tier: plan.tier,
