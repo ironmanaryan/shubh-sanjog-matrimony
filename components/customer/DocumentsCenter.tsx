@@ -3,13 +3,16 @@
 /**
  * Document & Kundli management - `/customer/documents`.
  *
- * Pipeline: pick any file -> client-side compression to ~4-20 KB -> DIRECT
- * Supabase Storage upload + INSERT into `documents` table -> React state
- * updated immediately so the row appears in "My Documents" the same frame
- * the upload resolves. No `/api/documents/upload` round trip is made.
+ * PURE PRESENTATION. The upload pipeline (file pick -> client-side
+ * compression -> Supabase Storage PUT -> strict DB INSERT with `.select()`
+ * -> refetch via fetchDocuments()) lives in
+ * `app/customer/documents/page.tsx`. This component renders the list and
+ * the upload picker; it does NOT maintain its own documents cache and
+ * does NOT optimistically push fake rows into state. Insertion failures
+ * are surfaced to the page, which raises an `alert()` per the brief.
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useMemo, useRef } from 'react';
 import {
   CheckCircle2,
   Download,
@@ -20,15 +23,33 @@ import {
   UploadCloud,
   XCircle,
 } from 'lucide-react';
-import {
-  deleteCustomerDocument,
-  downloadCustomerDocument,
-  formatBytes,
-  listCustomerDocuments,
-  uploadCompressedDocument,
-  type CustomerDocument,
-  type DocumentType,
-} from '@/lib/document-api';
+import { formatBytes, type CustomerDocument, type DocumentType } from '@/lib/document-api';
+
+export type DocumentsCenterProps = {
+  /** Source of truth for "My Documents". Pulled from the database. */
+  docs: CustomerDocument[];
+  /** Currently-selected document type (controlled state). */
+  docType: DocumentType;
+  onDocTypeChange: (next: DocumentType) => void;
+  /** Currently-picked file's metadata, if any. The page owns the File. */
+  pickedFile: File | null;
+  onPickedFile: (file: File | null) => void;
+  /** Fired when the user clicks "Upload". Returns a promise that resolves
+   *  when Supabase has returned the new row. The page must do the strict
+   *  INSERT + refetch; this component only shows progress. */
+  onUpload: () => Promise<void> | void;
+  /** Local upload UX state. */
+  uploading: boolean;
+  uploadProgress: number;
+  phaseMessage: string;
+  /** Delete the document row + storage object. */
+  onDelete: (id: string) => Promise<void> | void;
+  /** Streaming download helper. */
+  onDownload: (id: string, suggestedName: string) => Promise<boolean> | boolean;
+  /** Notification toast for transient messages. */
+  toast: { kind: 'success' | 'error' | 'info'; message: string } | null;
+  onDismissToast: () => void;
+};
 
 const docTypeLabels: Record<string, string> = {
   identity: 'Identity Proof (Govt ID)',
@@ -75,143 +96,54 @@ function formatDate(ms: number) {
   }
 }
 
-export default function DocumentsCenter({ initial }: { initial?: CustomerDocument[] } = {}) {
-  const [items, setItems] = useState<CustomerDocument[]>(initial || []);
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [phaseMessage, setPhaseMessage] = useState('');
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [docType, setDocType] = useState<DocumentType>('identity');
+export default function DocumentsCenter(props: DocumentsCenterProps) {
+  const {
+    docs,
+    docType,
+    onDocTypeChange,
+    pickedFile,
+    onPickedFile,
+    onUpload,
+    uploading,
+    uploadProgress,
+    phaseMessage,
+    onDelete,
+    onDownload,
+    toast,
+    onDismissToast,
+  } = props;
+
   const fileRef = useRef<HTMLInputElement | null>(null);
-  const [toast, setToast] = useState<{ kind: 'success' | 'error' | 'info'; message: string } | null>(null);
-
-  function showToast(kind: 'success' | 'error' | 'info', message: string) {
-    setToast({ kind, message });
-    setTimeout(() => setToast((cur) => (cur && cur.message === message ? null : cur)), 4500);
-  }
-
-  const refresh = async () => {
-    const docs = await listCustomerDocuments();
-    docs.sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0));
-    setItems(docs);
-  };
-
-  useEffect(() => {
-    void refresh();
-    const onFocus = () => void refresh();
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, []);
-
-  /**
-   * Pick a file, compress in the browser, then upload DIRECTLY to Supabase
-   * Storage + INSERT into the documents table. NO `/api/documents/upload`
-   * call is made. The React state (`items`) is updated immediately when
-   * the Supabase INSERT returns its canonical row, so the document appears
-   * under "My Documents" the instant the round-trip completes, without a
-   * page refresh, without touching the Express API route.
-   */
-  async function handleUpload() {
-    const file = fileRef.current?.files?.[0];
-    if (!file) {
-      showToast('info', 'Choose a file first.');
-      return;
-    }
-    setUploading(true);
-    setUploadProgress(0);
-    setPhaseMessage(`Compressing ${file.name} (${formatBytes(file.size)})\u2026`);
-
-    try {
-      const { record, compressed } = await uploadCompressedDocument(file, docType, {
-        onProgress: (pct) => {
-          // Compression accounts for the first half of the bar; the upload
-          // claim runs 50 -> 100. Customers want to see motion both before
-          // and after the network round-trip fires.
-          const mapped =
-            pct < 50
-              ? Math.round(pct * 0.5)
-              : Math.min(100, Math.round(50 + (pct - 50) * 1.0));
-          setUploadProgress(mapped);
-          if (pct < 30) setPhaseMessage(`Reading source (${formatBytes(file.size)})\u2026`);
-          else if (pct < 50) setPhaseMessage('Compressing\u2026');
-          else if (pct < 95) setPhaseMessage('Uploading to Supabase Storage\u2026');
-          else setPhaseMessage('Saving record\u2026');
-        },
-      });
-      setUploadProgress(100);
-      setPhaseMessage(`Uploaded ${record.name} (${formatBytes(compressed.compressedSize)})`);
-
-      // Instant React-state update.
-      // The Supabase INSERT already returned the canonical row (id,
-      // file_url, status\u2026) so we can commit it to state without waiting
-      // on any other round trip. setItems is synchronous from React's
-      // perspective; the new row appears in the list the same frame the
-      // upload resolves - no manual refresh required.
-      setItems((prev) => {
-        const filtered = prev.filter((p) => p.id !== record.id);
-        return [record, ...filtered];
-      });
-
-      if (fileRef.current) fileRef.current.value = '';
-
-      // Best-effort server reconciliation - does NOT gate the UI. If the
-      // /api/documents list endpoint is down, local state is still the
-      // source of truth and the user already sees their upload.
-      setTimeout(() => void refresh(), 800);
-      setTimeout(() => {
-        setUploadProgress(0);
-        setPhaseMessage('');
-      }, 3000);
-
-      showToast('success', `${record.name} uploaded - pending review.`);
-    } catch (err: any) {
-      console.error('document upload failed', err);
-      const raw = err?.message || 'Upload failed. Please try again.';
-      // Never bubble raw markup back into the toast - defence in depth.
-      const message = /<!DOCTYPE|<\/?html|<pre/i.test(raw)
-        ? 'Upload failed. Please try again or pick a different file.'
-        : raw;
-      setPhaseMessage(message);
-      showToast('error', message);
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  async function handleDelete(id: string) {
-    const found = items.find((x) => x.id === id);
-    if (!found) return;
-    const confirmed = window.confirm(
-      `Delete "${found.name}" permanently? This will also remove the file from storage.`
-    );
-    if (!confirmed) return;
-    setDeletingId(id);
-    const ok = await deleteCustomerDocument(id);
-    setDeletingId(null);
-    if (ok) {
-      setItems((prev) => prev.filter((p) => p.id !== id));
-      void refresh();
-      showToast('success', `${found.name} deleted.`);
-    } else {
-      showToast('error', 'Could not delete this document. Please try again.');
-    }
-  }
-
-  async function handleDownload(id: string) {
-    const found = items.find((x) => x.id === id);
-    const ok = await downloadCustomerDocument(id, found?.name || 'document');
-    if (!ok) showToast('error', 'Download failed.');
-  }
 
   const groupedByType = useMemo(() => {
     const buckets: Record<string, CustomerDocument[]> = {};
-    for (const it of items) {
+    for (const it of docs) {
       const k = String(it.documentType || 'other');
       if (!buckets[k]) buckets[k] = [];
       buckets[k].push(it);
     }
     return buckets;
-  }, [items]);
+  }, [docs]);
+
+  function handlePick(ev: React.ChangeEvent<HTMLInputElement>) {
+    const f = ev.target.files?.[0] || null;
+    onPickedFile(f);
+  }
+
+  function handleClear() {
+    if (fileRef.current) fileRef.current.value = '';
+    onPickedFile(null);
+  }
+
+  async function handleDelete(id: string) {
+    const found = docs.find((x) => x.id === id);
+    if (!found) return;
+    const confirmed = window.confirm(
+      `Delete "${found.name}" permanently? This will also remove the file from storage.`
+    );
+    if (!confirmed) return;
+    await onDelete(id);
+  }
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -221,7 +153,7 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
         <div
           role="status"
           aria-live="polite"
-          onClick={() => setToast(null)}
+          onClick={onDismissToast}
           className={`fixed inset-x-0 top-4 z-50 mx-auto flex max-w-md cursor-pointer items-center gap-2 rounded-full border px-4 py-2 text-sm font-bold shadow-lg ${
             toast.kind === 'success'
               ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
@@ -252,11 +184,12 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
             ref={fileRef}
             type="file"
             accept="image/*,application/pdf"
+            onChange={handlePick}
             className="block w-full rounded-xl border border-[#e6c98a] bg-[#fffaf3] px-3 py-2 text-sm file:mr-3 file:rounded-lg file:border-0 file:bg-[#7b102d] file:px-3 file:py-1.5 file:font-bold file:text-white hover:file:bg-[#5a0a1f]"
           />
           <select
             value={docType}
-            onChange={(e) => setDocType(e.target.value as DocumentType)}
+            onChange={(e) => onDocTypeChange(e.target.value as DocumentType)}
             className="rounded-xl border border-[#e6c98a] bg-[#fffaf3] px-3 py-2 text-sm"
           >
             {DOCUMENT_TYPES.map((opt) => (
@@ -264,14 +197,23 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
             ))}
           </select>
           <button
-            disabled={uploading}
-            onClick={handleUpload}
+            disabled={uploading || !pickedFile}
+            onClick={onUpload}
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#7b102d] px-4 py-2 text-sm font-bold text-white hover:bg-[#5a0a1f] disabled:opacity-60"
           >
             {uploading ? <Loader2 className="animate-spin" size={16} /> : <UploadCloud size={16} />}
             {uploading ? 'Working\u2026' : 'Upload'}
           </button>
         </div>
+
+        {pickedFile && !uploading && (
+          <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-dashed border-[#e6c98a] bg-[#fffaf3] px-3 py-1.5 text-xs text-[#5a3743]">
+            <span className="truncate">Picked: <strong>{pickedFile.name}</strong> ({formatBytes(pickedFile.size)})</span>
+            <button type="button" onClick={handleClear} className="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase text-[#7b102d] hover:bg-[#fbeeda]">
+              Clear
+            </button>
+          </div>
+        )}
 
         {uploading && (
           <div className="mt-4">
@@ -294,17 +236,17 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
             My Documents
           </h3>
           <span className="rounded-full bg-[#fbeeda] px-3 py-1 text-xs font-bold text-[#7b102d]">
-            {items.length} {items.length === 1 ? 'file' : 'files'}
+            {docs.length} {docs.length === 1 ? 'file' : 'files'}
           </span>
         </div>
 
-        {items.length === 0 ? (
+        {docs.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-[#f2d9a8] bg-[#fffaf3] p-8 text-center text-sm text-[#5a3743]">
             No documents uploaded yet. Pick a file above to get started.
           </div>
         ) : (
           <div className="divide-y divide-[#f4e6c2]">
-            {items.map((it) => {
+            {docs.map((it) => {
               const status = normalizeStatus(it.status);
               const typeLabel =
                 docTypeLabels[String(it.documentType || '')] || String(it.documentType || 'document');
@@ -334,7 +276,7 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
                   </div>
                   <div className="flex items-center justify-end gap-2">
                     <button
-                      onClick={() => handleDownload(it.id)}
+                      onClick={() => onDownload(it.id, it.name)}
                       title="View / Download"
                       className="inline-flex items-center gap-1 rounded-full border border-[#d4a64a] bg-white px-3 py-1.5 text-xs font-bold text-[#7b102d] hover:bg-[#fff7ee]"
                     >
@@ -342,11 +284,10 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
                     </button>
                     <button
                       onClick={() => handleDelete(it.id)}
-                      disabled={deletingId === it.id}
                       title="Permanently delete"
                       className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-bold text-rose-700 hover:bg-rose-100 disabled:opacity-60"
                     >
-                      {deletingId === it.id ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+                      <Trash2 size={12} />
                       Delete
                     </button>
                   </div>

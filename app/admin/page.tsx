@@ -24,6 +24,7 @@ import {
 import AdminSignInGate from '@/components/admin/AdminSignInGate';
 import LiveActivityPanel from '@/components/admin/LiveActivityPanel';
 import { clearSession, getSession, isNetworkError } from '@/lib/auth-client';
+import { getSupabase } from '@/lib/supabase';
 
 
 // Consolidated admin panel (scope PDF §18–§31): one route with permission-gated
@@ -603,9 +604,57 @@ export default function AdminPage() {
           if (res.ok) setProfiles(json.profiles || []);
         }
         if (key === 'documents') {
-          const res = await fetch(`${API}/admin/documents`, { headers: authHeaders() });
-          const json = await res.json();
-          if (res.ok) setDocuments(json.documents || []);
+          // PRIMARY source: Supabase `documents` table, fetched directly
+          // from the browser via the admin user's anon JWT. This is the
+          // single source of truth — no mock fallbacks, no optimistic
+          // admin-only stubs. Documents uploaded through the customer
+          // direct-Supabase path land in this table; if we only hit
+          // `/api/admin/documents` we miss rows when the Express API is
+          // briefly unreachable.
+          const supabase = getSupabase();
+          let directCount = 0;
+          if (supabase) {
+            try {
+              const { data: rows, error } = await supabase
+                .from('documents')
+                .select('*')
+                .order('uploaded_at', { ascending: false })
+                .limit(500);
+              if (!error && Array.isArray(rows)) {
+                const adapted: DocRow[] = rows.map((r: any) => ({
+                  id: String(r.id),
+                  customerId: String(r.user_id || ''),
+                  customerName:
+                    String(r.original_name?.split('-')[0] || r.user_id || '').slice(0, 32) || 'Customer',
+                  documentType:
+                    r.document_type || r.doc_type || null,
+                  status: String(r.status || 'Pending Review'),
+                  rejectionReason: r.rejection_reason || null,
+                  originalName: String(r.original_name || r.file_url?.split('/').pop() || 'document'),
+                  uploadedAt: Number(r.uploaded_at || r.created_at || Date.now()),
+                }));
+                setDocuments(adapted);
+                directCount = adapted.length;
+              }
+            } catch (directErr) {
+              console.warn('admin documents direct SELECT failed:', directErr);
+            }
+          }
+
+          // SECONDARY fallback: if Supabase returned nothing (network down,
+          // or the admin user is not authed in the browser), try the server
+          // route. If THAT fails too, leave the list empty — NEVER inject
+          // mock rows. The brief is explicit: no fake admin-queue fallback.
+          if (directCount === 0) {
+            try {
+              const res = await fetch(`${API}/admin/documents`, { headers: authHeaders() });
+              const json = await res.json();
+              if (res.ok) setDocuments(json.documents || []);
+            } catch (serverErr) {
+              console.warn('admin documents server fallback failed:', serverErr);
+              setDocuments([]);
+            }
+          }
         }
         if (key === 'payments') {
           const res = await fetch(`${API}/admin/payments`, { headers: authHeaders() });
