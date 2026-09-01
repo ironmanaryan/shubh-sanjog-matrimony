@@ -110,7 +110,7 @@ type FeaturedProfile = {
 
 const suggestedProfiles: FeaturedProfile[] = [
   {
-    id: 'rahul-sharma',
+    id: '1',
     name: 'Rahul Sharma',
     initials: 'RS',
     gender: 'groom',
@@ -122,7 +122,7 @@ const suggestedProfiles: FeaturedProfile[] = [
     community: 'Brahmin',
   },
   {
-    id: 'amit-deshmukh',
+    id: '2',
     name: 'Amit Deshmukh',
     initials: 'AD',
     gender: 'groom',
@@ -134,19 +134,19 @@ const suggestedProfiles: FeaturedProfile[] = [
     community: 'Maratha',
   },
   {
-    id: 'vikram-patil',
-    name: 'Vikram Patil',
-    initials: 'VP',
+    id: '3',
+    name: 'Rohan Kulkarni',
+    initials: 'RK',
     gender: 'groom',
     age: '29 Yrs',
     height: "5'10\"",
-    profession: 'Doctor',
-    qualification: 'MBBS',
+    profession: 'Data Scientist',
+    qualification: 'B.Tech',
     location: 'Pune',
-    community: 'Maratha',
+    community: 'Deshastha',
   },
   {
-    id: 'priya-verma',
+    id: '4',
     name: 'Priya Verma',
     initials: 'PV',
     gender: 'bride',
@@ -158,7 +158,7 @@ const suggestedProfiles: FeaturedProfile[] = [
     community: 'Kunbi',
   },
   {
-    id: 'sneha-kulkarni',
+    id: '5',
     name: 'Sneha Kulkarni',
     initials: 'SK',
     gender: 'bride',
@@ -170,16 +170,16 @@ const suggestedProfiles: FeaturedProfile[] = [
     community: 'Brahmin',
   },
   {
-    id: 'ananya-sharma',
-    name: 'Ananya Sharma',
-    initials: 'AS',
+    id: '6',
+    name: 'Ananya Joshi',
+    initials: 'AJ',
     gender: 'bride',
     age: '25 Yrs',
-    height: "5'6\"",
-    profession: 'Lawyer',
-    qualification: 'LLB',
+    height: "5'3\"",
+    profession: 'UI/UX Designer',
+    qualification: 'B.Des',
     location: 'Mumbai',
-    community: 'Brahmin',
+    community: 'CKP',
   },
 ];
 
@@ -408,7 +408,7 @@ export default async function HomePage() {
         </Reveal>
 
         {/* Responsive: 1 col mobile (stacked) → 2 cols tablet → 3 cols desktop (2 rows of 3, total 6) */}
-        <div className="grid grid-cols-1 items-stretch gap-6 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full max-w-7xl mx-auto px-4">
           {suggestedProfiles.map((profile, index) => {
             const theme = avatarStyles[profile.gender];
             return (
