@@ -818,7 +818,9 @@ export default function CustomerDashboardPage() {
                 {/* Profile Picture */}
                 <div className="flex flex-col items-center gap-3 rounded-2xl bg-[#fffaf3] p-5">
                   {(() => {
-                    const photoUrl = (supabaseProfile['photo_url'] as string) || (supabaseProfile['avatar_url'] as string) || (supabaseProfile['profile_photo'] as string) || (supabaseProfile['cloudinary_url'] as string) || (supabaseProfile['personal'] as Record<string, unknown>)?.['photoUrl'] as string;
+                    // Database audit: profiles table has avatar_url, photo_url, profile_photo (all text, per supabase/profiles_migration.sql:63-65)
+                    // No image_url column exists. Prioritize avatar_url as primary.
+                    const photoUrl = (supabaseProfile['avatar_url'] as string) || (supabaseProfile['photo_url'] as string) || (supabaseProfile['profile_photo'] as string) || (supabaseProfile['cloudinary_url'] as string) || (supabaseProfile['personal'] as Record<string, unknown>)?.['photoUrl'] as string;
                     return photoUrl ? (
                       <Image
                         src={photoUrl}
@@ -828,6 +830,7 @@ export default function CustomerDashboardPage() {
                         sizes="160px"
                         quality={75}
                         className="h-40 w-40 rounded-3xl object-cover shadow-md ring-2 ring-[#f2d9a8]"
+                        priority={false}
                       />
                     ) : (
                       <div className="flex h-40 w-40 items-center justify-center rounded-3xl bg-gradient-to-br from-[#7b102d] to-[#d4a64a] text-5xl font-black text-white shadow-md">
