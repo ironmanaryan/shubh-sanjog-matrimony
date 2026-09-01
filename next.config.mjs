@@ -3,11 +3,13 @@ const nextConfig = {
   reactStrictMode: true,
   // The Express API is mounted inside this app at app/api/[...path]/route.ts.
   // These packages must be required from node_modules at runtime rather than
-  // bundled: `sqlite3` is a native addon, and the rest rely on dynamic
-  // require() patterns that a bundler cannot statically resolve.
+  // bundled: they rely on dynamic require() patterns that a bundler cannot
+  // statically resolve. `sqlite`/`sqlite3` are intentionally NOT listed here —
+  // they are dev-only (see devDependencies, pure JS fallback via `sqlite` if
+  // needed locally); Supabase (`pg`) is the primary DB on Vercel. Keeping the
+  // native `sqlite3` addon in the production bundle would force node-gyp
+  // compilation and bloat/slow the Vercel deployment.
   serverExternalPackages: [
-    'sqlite3',
-    'sqlite',
     'express',
     'cors',
     'multer',
