@@ -6,7 +6,11 @@ import { CheckCircle, User, Heart, GraduationCap, MapPin, Upload, ChevronRight, 
 import { getSupabase } from '@/lib/supabase';
 import { requestJson } from '@/lib/api-client';
 
+type ProfileCreatedFor = 'myself' | 'son' | 'daughter' | 'brother' | 'sister' | 'friend' | 'relative';
+
 type FormState = {
+  // Profile For - onboarding step 1
+  profileCreatedFor: ProfileCreatedFor;
   // Personal Information
   fullName: string;
   gender: string;
@@ -58,6 +62,7 @@ type FormState = {
 };
 
 const initialForm: FormState = {
+  profileCreatedFor: 'myself',
   fullName: '',
   gender: '',
   dob: '',
@@ -103,11 +108,21 @@ const initialForm: FormState = {
   photoPreview: null,
 };
 
+const PROFILE_FOR_OPTIONS: { value: ProfileCreatedFor; label: string; desc: string }[] = [
+  { value: 'myself', label: 'Myself', desc: 'For myself' },
+  { value: 'son', label: 'My Son', desc: 'For my son' },
+  { value: 'daughter', label: 'My Daughter', desc: 'For my daughter' },
+  { value: 'brother', label: 'My Brother', desc: 'For my brother' },
+  { value: 'sister', label: 'My Sister', desc: 'For my sister' },
+  { value: 'friend', label: 'My Friend', desc: 'For my friend' },
+  { value: 'relative', label: 'My Relative', desc: 'For my relative' },
+];
+
 function FillDetailsInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialStep = parseInt(searchParams.get('step') || '1', 10);
-  const [step, setStep] = useState(Math.min(Math.max(initialStep, 1), 4));
+  const [step, setStep] = useState(Math.min(Math.max(initialStep, 1), 5));
   const [form, setForm] = useState<FormState>(initialForm);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -115,9 +130,13 @@ function FillDetailsInner() {
   const [userId, setUserId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
 
+  // Dynamic label helper: if profile is for someone else, prefix with Candidate's
+  const isForOther = form.profileCreatedFor !== 'myself';
+  const candidateLabel = (base: string) => (isForOther ? `Candidate's ${base}` : base);
+
   useEffect(() => {
     const s = parseInt(searchParams.get('step') || '1', 10);
-    if (!isNaN(s) && s >= 1 && s <= 4) setStep(s);
+    if (!isNaN(s) && s >= 1 && s <= 5) setStep(s);
   }, [searchParams]);
 
   useEffect(() => {
@@ -146,7 +165,7 @@ function FillDetailsInner() {
       // (they belong to `documents`/`matrimonial_profiles`). We now select only
       // valid columns and fallback gracefully if avatar fields are null.
       const PROFILE_PREFILL_COLUMNS = [
-        'id', 'user_id',
+        'id', 'user_id', 'profile_created_for',
         'full_name', 'gender', 'dob', 'age', 'height', 'weight',
         'religion', 'caste', 'sub_caste', 'mother_tongue', 'marital_status',
         'city', 'country', 'citizenship', 'nri_status', 'manglik_status',
@@ -161,14 +180,39 @@ function FillDetailsInner() {
         'photo_url', 'avatar_url', 'profile_photo',
         'personal', 'education', 'family',
       ].join(',');
+      const PROFILE_PREFILL_FALLBACK = PROFILE_PREFILL_COLUMNS.replace(',profile_created_for', '').replace('profile_created_for,', '');
+      let prefillData: Record<string, unknown> | null = null;
       try {
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from('profiles')
           .select(PROFILE_PREFILL_COLUMNS)
           .or(`id.eq.${user.id},user_id.eq.${user.id}`)
           .maybeSingle();
+        if (error && (String(error.message || '').includes('profile_created_for') || String((error as unknown as Record<string, unknown>)?.['code'] || '').includes('PGRST'))) {
+          console.warn('[profiles] profile_created_for column missing, retrying without it:', error.message);
+          const { data: fallback } = await supabase.from('profiles').select(PROFILE_PREFILL_FALLBACK).or(`id.eq.${user.id},user_id.eq.${user.id}`).maybeSingle();
+          prefillData = (fallback as unknown as Record<string, unknown>) || null;
+        } else if (data) {
+          prefillData = data as unknown as Record<string, unknown>;
+        }
+      } catch (e) {
+        console.warn('[profiles] prefill fetch failed, trying fallback without profile_created_for', e);
+        try {
+          const { data: fallback } = await supabase.from('profiles').select(PROFILE_PREFILL_FALLBACK).or(`id.eq.${user.id},user_id.eq.${user.id}`).maybeSingle();
+          prefillData = (fallback as unknown as Record<string, unknown>) || null;
+        } catch {}
+      }
+      try {
+        const data = prefillData;
         if (data) {
           const d = data as unknown as Record<string, unknown>;
+          // Prefill profile_created_for if present and valid
+          const pcf = d['profile_created_for'] as string | undefined;
+          if (pcf && PROFILE_FOR_OPTIONS.some((o) => o.value === pcf)) {
+            // Defer to next tick to avoid setState during render
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            setForm((prev: any) => ({ ...prev, profileCreatedFor: pcf as ProfileCreatedFor }));
+          }
           const get = (keys: string[]) => {
             for (const k of keys) if (d[k] !== undefined && d[k] !== null && String(d[k]).trim() !== '') return String(d[k]);
             return undefined;
@@ -275,21 +319,24 @@ function FillDetailsInner() {
 
   const validateStep = (): boolean => {
     if (step === 1) {
-      if (!form.fullName.trim()) { setError('Please enter full name.'); return false; }
+      if (!form.profileCreatedFor) { setError('Please select who this profile is for.'); return false; }
+    }
+    if (step === 2) {
+      if (!form.fullName.trim()) { setError(`Please enter ${candidateLabel('full name').toLowerCase()}.`); return false; }
       if (!form.gender) { setError('Please select gender.'); return false; }
       if (!form.dob) { setError('Please select date of birth.'); return false; }
       if (!form.religion) { setError('Please select religion.'); return false; }
       if (!form.motherTongue) { setError('Please enter mother tongue.'); return false; }
       if (!form.maritalStatus) { setError('Please select marital status.'); return false; }
     }
-    if (step === 2) {
+    if (step === 3) {
       if (!form.highestQualification) { setError('Please select highest qualification.'); return false; }
       if (!form.profession.trim()) { setError('Please enter profession.'); return false; }
     }
-    if (step === 3) {
+    if (step === 4) {
       if (!form.aboutMe.trim()) { setError('Please write about yourself.'); return false; }
     }
-    if (step === 4) {
+    if (step === 5) {
       if (!form.fatherName.trim()) { setError("Please enter father's name."); return false; }
       if (!form.motherName.trim()) { setError("Please enter mother's name."); return false; }
     }
@@ -299,7 +346,7 @@ function FillDetailsInner() {
 
   const handleNext = () => {
     if (!validateStep()) return;
-    if (step < 4) {
+    if (step < 5) {
       const n = step + 1;
       setStep(n);
       router.push(`/register/fill-details?step=${n}`);
@@ -347,10 +394,11 @@ function FillDetailsInner() {
       const brothersNum = form.brothers ? parseInt(form.brothers, 10) : null;
       const sistersNum = form.sisters ? parseInt(form.sisters, 10) : null;
 
-      // Flat payload for profiles table
+      // Flat payload for profiles table - includes profile_created_for with fallback
       const payload: Record<string, unknown> = {
         id: userId,
         user_id: userId,
+        profile_created_for: form.profileCreatedFor,
         full_name: form.fullName.trim(),
         gender: form.gender,
         dob: form.dob,
@@ -505,6 +553,33 @@ function FillDetailsInner() {
         } catch (err) { lastError = err instanceof Error ? err.message : String(err); }
       }
 
+      // Graceful fallback: if profile_created_for column missing, retry without it
+      if (!saved && lastError && String(lastError).toLowerCase().includes('profile_created_for')) {
+        console.warn('[profiles] profile_created_for column missing, retrying without it (migration pending):', lastError);
+        const fallbackPayload = { ...payload };
+        delete fallbackPayload.profile_created_for;
+        const fallbackFull = { ...fullPayload };
+        delete (fallbackFull as Record<string, unknown>).profile_created_for;
+        try {
+          const { error } = await supabase.from('profiles').upsert(fallbackFull as never, { onConflict: 'id' } as never);
+          if (!error) { saved = true; lastError = null; }
+          else {
+            const { error: e2 } = await supabase.from('profiles').upsert(fallbackFull as never, { onConflict: 'user_id' } as never);
+            if (!e2) { saved = true; lastError = null; }
+          }
+        } catch (e) { console.warn('[profiles] fallback without profile_created_for failed', e); }
+        if (!saved) {
+          try {
+            const { error: e3 } = await supabase.from('profiles').upsert(fallbackPayload as never, { onConflict: 'id' } as never);
+            if (!e3) { saved = true; lastError = null; }
+            else {
+              const { error: e4 } = await supabase.from('profiles').upsert(fallbackPayload as never, { onConflict: 'user_id' } as never);
+              if (!e4) { saved = true; lastError = null; }
+            }
+          } catch (e) { console.warn('[profiles] fallback flat without profile_created_for failed', e); }
+        }
+      }
+
       // Attempt 3: minimal required fields
       if (!saved) {
         try {
@@ -596,8 +671,8 @@ function FillDetailsInner() {
 
   const inputClass = 'w-full rounded-xl border border-[#f2d9a8] bg-[#fffaf3] px-4 py-3 text-sm outline-none focus:border-[#d4a64a] focus:ring-2 focus:ring-[#d4a64a]/20';
   const labelClass = 'mb-1.5 block text-sm font-semibold text-[#4d2c36]';
-  const stepTitles = ['Personal Information', 'Education & Career', 'Lifestyle & About Me', 'Family Information'];
-  const stepIcons = [User, GraduationCap, Utensils, Users];
+  const stepTitles = ['Profile For', 'Personal Information', 'Education & Career', 'Lifestyle & About Me', 'Family Information'];
+  const stepIcons = [Heart, User, GraduationCap, Utensils, Users];
 
   return (
     <div className="min-h-screen bg-[#fffaf8] px-4 py-8 sm:px-6 lg:px-8">
@@ -643,7 +718,7 @@ function FillDetailsInner() {
             })}
           </div>
           <div className="mt-4 flex gap-1">
-            {[1,2,3,4].map((s) => (
+            {[1,2,3,4,5].map((s) => (
               <div key={s} className={`h-1.5 flex-1 rounded-full transition ${s <= step ? 'bg-gradient-to-r from-[#7b102d] to-[#d4a64a]' : 'bg-[#f2d9a8]'}`} />
             ))}
           </div>
@@ -654,15 +729,52 @@ function FillDetailsInner() {
 
           {step === 1 && (
             <section>
-              <h2 className="mb-1 flex items-center gap-2 text-lg font-black text-[#2c0d16]"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#fff1dc] text-[#7b102d]"><User size={16} /></span> Personal Information</h2>
-              <p className="mb-6 text-xs text-[#8a7a85]">Basic biodata & identity</p>
+              <h2 className="mb-1 flex items-center gap-2 text-lg font-black text-[#2c0d16]"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#fff1dc] text-[#7b102d]"><Heart size={16} /></span> This Profile is for</h2>
+              <p className="mb-6 text-xs text-[#8a7a85]">Select who you are creating this profile for</p>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {PROFILE_FOR_OPTIONS.map((opt) => {
+                  const isSelected = form.profileCreatedFor === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setForm((prev) => ({ ...prev, profileCreatedFor: opt.value }))}
+                      className={`group relative flex flex-col items-center justify-center rounded-2xl border-2 p-4 text-center transition-all duration-200 hover:shadow-md ${
+                        isSelected
+                          ? 'border-[#7b102d] bg-gradient-to-br from-[#fff1dc] to-[#ffe9c2] text-[#7b102d] shadow-md ring-2 ring-[#7b102d]/20'
+                          : 'border-[#f2d9a8] bg-[#fffaf3] text-[#4d2c36] hover:border-[#d4a64a] hover:bg-white'
+                      }`}
+                    >
+                      {isSelected && (
+                        <span className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-[#7b102d] text-white">
+                          <CheckCircle size={12} />
+                        </span>
+                      )}
+                      <span className={`text-sm font-bold ${isSelected ? 'text-[#7b102d]' : 'text-[#2c0d16]'}`}>{opt.label}</span>
+                      <span className={`mt-1 text-[11px] ${isSelected ? 'text-[#7b102d]/70' : 'text-[#8a7a85]'}`}>{opt.desc}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4">
+                <p className="text-xs font-medium leading-5 text-amber-900">
+                  <span className="font-bold">Note:</span> Shubh Sanjog Matrimony is built for genuine match-seekers. Profiles created by commercial agents or marriage bureaus are strictly prohibited.
+                </p>
+              </div>
+            </section>
+          )}
+
+          {step === 2 && (
+            <section>
+              <h2 className="mb-1 flex items-center gap-2 text-lg font-black text-[#2c0d16]"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#fff1dc] text-[#7b102d]"><User size={16} /></span> {isForOther ? "Candidate's Personal Information" : 'Personal Information'}</h2>
+              <p className="mb-6 text-xs text-[#8a7a85]">Basic biodata & identity {isForOther && <span className="font-semibold text-[#7b102d]">— Candidate&apos;s details</span>}</p>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="sm:col-span-2">
-                  <label className={labelClass}>Full Name *</label>
-                  <input type="text" value={form.fullName} onChange={(e) => update('fullName', e.target.value)} placeholder="Aarav Sharma" className={inputClass} />
+                  <label className={labelClass}>{candidateLabel('Full Name')} *</label>
+                  <input type="text" value={form.fullName} onChange={(e) => update('fullName', e.target.value)} placeholder={isForOther ? "Candidate's full name" : "Aarav Sharma"} className={inputClass} />
                 </div>
                 <div>
-                  <label className={labelClass}>Gender *</label>
+                  <label className={labelClass}>{candidateLabel('Gender')} *</label>
                   <select value={form.gender} onChange={(e) => update('gender', e.target.value)} className={inputClass}>
                     <option value="">Select</option><option>Male</option><option>Female</option><option>Other</option>
                   </select>
@@ -761,7 +873,7 @@ function FillDetailsInner() {
             </section>
           )}
 
-          {step === 2 && (
+          {step === 3 && (
             <section>
               <h2 className="mb-1 flex items-center gap-2 text-lg font-black text-[#2c0d16]"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#fff1dc] text-[#7b102d]"><GraduationCap size={16} /></span> Education & Career</h2>
               <p className="mb-6 text-xs text-[#8a7a85]">Qualification & professional background</p>
@@ -810,7 +922,7 @@ function FillDetailsInner() {
             </section>
           )}
 
-          {step === 3 && (
+          {step === 4 && (
             <section>
               <h2 className="mb-1 flex items-center gap-2 text-lg font-black text-[#2c0d16]"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#fff1dc] text-[#7b102d]"><Utensils size={16} /></span> Lifestyle & About Me</h2>
               <p className="mb-6 text-xs text-[#8a7a85]">Habits, interests & personality</p>
@@ -852,7 +964,7 @@ function FillDetailsInner() {
             </section>
           )}
 
-          {step === 4 && (
+          {step === 5 && (
             <section>
               <h2 className="mb-1 flex items-center gap-2 text-lg font-black text-[#2c0d16]"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#fff1dc] text-[#7b102d]"><Users size={16} /></span> Family Information</h2>
               <p className="mb-6 text-xs text-[#8a7a85]">Family background & values</p>
@@ -909,7 +1021,7 @@ function FillDetailsInner() {
             <button type="button" onClick={handleBack} disabled={step === 1} className="inline-flex items-center gap-1.5 rounded-full border border-[#f2d9a8] bg-white px-6 py-2.5 text-sm font-bold text-[#5a3743] disabled:opacity-40">
               <ChevronLeft size={16} /> Back
             </button>
-            {step < 4 ? (
+            {step < 5 ? (
               <button type="button" onClick={handleNext} className="inline-flex items-center gap-1.5 rounded-full bg-[#7b102d] px-8 py-2.5 text-sm font-bold text-white hover:bg-[#5a0a1f]">
                 Next <ChevronRight size={16} />
               </button>
