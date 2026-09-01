@@ -5,6 +5,7 @@ import { API } from '@/lib/api-base';
 import { useEffect, useMemo, useState } from 'react';
 import { BadgeCheck, CheckCircle2, ChevronRight, Copy, CreditCard, FileUp, Info, ShieldCheck, Smartphone, Wallet, XCircle } from 'lucide-react';
 import { PaymentQrCode } from '../../../components/UpiPaymentModal';
+import MembershipExpiryBanner from '@/components/customer/MembershipExpiryBanner';
 
 
 type Plan = {
@@ -197,6 +198,7 @@ export default function MembershipCheckoutPage() {
   return (
     <div className="min-h-screen bg-[#fffaf8] px-4 py-6 text-[#2c0d16] sm:px-6 lg:px-8">
       <div className="mx-auto max-w-6xl">
+        <MembershipExpiryBanner />
         <div className="mb-6 flex flex-col gap-4 rounded-[28px] border border-[#f1d7a6] bg-white p-5 shadow-soft lg:flex-row lg:items-center lg:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[#7b102d]">Membership</p>

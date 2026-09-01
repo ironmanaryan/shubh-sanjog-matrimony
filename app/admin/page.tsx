@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity,
   BarChart3,
+  CalendarClock,
   CheckCircle2,
   CreditCard,
   Download,
@@ -31,7 +32,7 @@ import { getSupabase } from '@/lib/supabase';
 // tabs — Profile Review, Document Verification, UPI Payment Approvals, Matching
 // Management, Reports & Analytics, plus an ADMIN-only Audit Log viewer (§31).
 // RBAC (§29) hides/restricts tabs per role.
-type TabKey = 'overview' | 'profiles' | 'documents' | 'payments' | 'matchmaking' | 'analytics' | 'audit' | 'activity';
+type TabKey = 'overview' | 'profiles' | 'documents' | 'payments' | 'matchmaking' | 'analytics' | 'audit' | 'activity' | 'appointments';
 
 type Role = string;
 
@@ -86,6 +87,7 @@ const ALL_TABS: { key: TabKey; label: string; icon: typeof LayoutDashboard }[] =
   { key: 'documents', label: 'Document Verification', icon: ShieldCheck },
   { key: 'payments', label: 'UPI Payment Approvals', icon: CreditCard },
   { key: 'matchmaking', label: 'Matching Management', icon: HeartHandshake },
+  { key: 'appointments', label: 'Appointment Management', icon: CalendarClock },
   { key: 'analytics', label: 'Reports & Analytics', icon: BarChart3 },
   { key: 'audit', label: 'Audit Logs', icon: ScrollText },
 ];
@@ -259,6 +261,22 @@ type DocRow = {
   uploadedAt: number;
 };
 
+// §22 — one row from GET /api/admin/appointments.
+type AppointmentRow = {
+  id: string;
+  userId: string;
+  customerName: string;
+  customerIdentifier: string;
+  date: string;
+  time: string;
+  type: string;
+  notes?: string | null;
+  status: string;
+  feedback?: string | null;
+  completedAt?: number | null;
+  createdAt?: number | null;
+};
+
 type PaymentRow = {
   id: string;
   userId: string;
@@ -415,6 +433,12 @@ export default function AdminPage() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [assignments, setAssignments] = useState<AssignmentRow[]>([]);
   const [assignForm, setAssignForm] = useState({ customerId: '', candidateId: '', note: '' });
+
+  // §22 Appointment Management workspace — admin sees every booking across
+  // all customers and can complete / cancel / leave feedback.
+  const [allAppointments, setAllAppointments] = useState<AppointmentRow[]>([]);
+  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<'All' | 'Booked' | 'Completed' | 'Cancelled'>('All');
+  const [appointmentFeedbackDrafts, setAppointmentFeedbackDrafts] = useState<Record<string, string>>({});
 
   // §27 Matching Management workspace
   const [matchCustomerId, setMatchCustomerId] = useState('');
@@ -660,6 +684,11 @@ export default function AdminPage() {
           const res = await fetch(`${API}/admin/payments`, { headers: authHeaders() });
           const json = await res.json();
           if (res.ok) setPayments(json.payments || []);
+        }
+        if (key === 'appointments') {
+          const res = await fetch(`${API}/admin/appointments`, { headers: authHeaders() });
+          const json = await res.json();
+          if (res.ok) setAllAppointments(json.appointments || []);
         }
         if (key === 'overview' && perms.manageTeam) {
           const res = await fetch(`${API}/admin/team`, { headers: authHeaders() });
@@ -1402,6 +1431,149 @@ export default function AdminPage() {
                     {notesFor === `payment:${payment.id}` && <NotesPanel targetType="payment" targetId={payment.id} />}
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ---------------- Appointment Management (§22) ---------------- */}
+        {tab === 'appointments' && (
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-black">Appointment Management</h2>
+                <p className="text-sm text-[#5a3743]">Confirm completions, record outcomes, and resolve cancellations.</p>
+              </div>
+              <div className="flex gap-2">
+                {(['All', 'Booked', 'Completed', 'Cancelled'] as const).map((value) => (
+                  <button
+                    key={value}
+                    onClick={() => setAppointmentStatusFilter(value)}
+                    className={`rounded-full px-4 py-2 text-xs font-bold ${
+                      appointmentStatusFilter === value ? 'bg-[#7b102d] text-white' : 'border border-[#e9d4a3] bg-white text-[#4d2c36]'
+                    }`}
+                  >
+                    {value}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {allAppointments.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-[#f2d9a8] bg-[#fffaf3] p-6 text-sm text-[#5a3743]">
+                No appointments have been booked yet — once customers schedule consultations or calls they will appear here.
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {allAppointments
+                  .filter((row) => appointmentStatusFilter === 'All' || row.status === appointmentStatusFilter)
+                  .map((row) => {
+                    const badgeCls =
+                      row.status === 'Completed'
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : row.status === 'Cancelled'
+                        ? 'bg-rose-100 text-rose-700'
+                        : 'bg-[#fff0cf] text-[#8a5a11]';
+                    const canComplete = row.status === 'Booked';
+                    return (
+                      <div key={row.id} className="rounded-2xl border border-[#f2d9a8] bg-white p-4 shadow-soft">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="text-base font-black text-[#2c0d16]">
+                              {row.customerName}
+                              {row.customerIdentifier ? <span className="ml-2 text-xs font-normal text-[#6a4a57]">({row.customerIdentifier})</span> : null}
+                            </div>
+                            <div className="mt-1 text-sm text-[#5a3743]">{row.type || 'Consultation'} • {row.date} • {row.time}</div>
+                            {row.notes ? <div className="mt-1 text-xs text-[#6a4a57]">Customer note: {row.notes}</div> : null}
+                            {row.feedback ? <div className="mt-1 text-xs italic text-[#0a7d4c]">Previous feedback: {row.feedback}</div> : null}
+                            {row.completedAt ? <div className="mt-1 text-[10px] uppercase tracking-wide text-[#6a4a57]">Completed {new Date(row.completedAt).toLocaleString()}</div> : null}
+                          </div>
+                          <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[10px] font-bold uppercase ${badgeCls}`}>{row.status}</span>
+                        </div>
+
+                        {perms.reviewProfiles && (
+                          <div className="mt-3 space-y-3 border-t border-[#f2d9a8] pt-3">
+                            <label className="block text-xs font-bold uppercase tracking-wide text-[#5a3743]">Outcome / feedback note</label>
+                            <textarea
+                              value={appointmentFeedbackDrafts[row.id] ?? row.feedback ?? ''}
+                              onChange={(e) =>
+                                setAppointmentFeedbackDrafts((prev) => ({ ...prev, [row.id]: e.target.value }))
+                              }
+                              placeholder="Notes the team should remember from this meeting…"
+                              rows={2}
+                              className="w-full rounded-xl border border-[#f2d9a8] bg-[#fffaf3] px-3 py-2 text-sm"
+                            />
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                disabled={busy || !canComplete}
+                                title={canComplete ? 'Mark this meeting as completed' : `Already ${row.status.toLowerCase()}`}
+                                onClick={() =>
+                                  act(
+                                    () =>
+                                      fetch(`${API}/admin/appointments/status`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                                        body: JSON.stringify({
+                                          id: row.id,
+                                          action: 'complete',
+                                          feedback: appointmentFeedbackDrafts[row.id] ?? row.feedback ?? '',
+                                        }),
+                                      }),
+                                    'Appointment marked completed.'
+                                  )
+                                }
+                                className="rounded-full bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                Mark completed
+                              </button>
+                              <button
+                                disabled={busy || !canComplete}
+                                onClick={() =>
+                                  act(
+                                    () =>
+                                      fetch(`${API}/admin/appointments/status`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                                        body: JSON.stringify({
+                                          id: row.id,
+                                          action: 'submit_feedback',
+                                          feedback: appointmentFeedbackDrafts[row.id] ?? row.feedback ?? '',
+                                        }),
+                                      }),
+                                    'Feedback recorded; meeting closed.'
+                                  )
+                                }
+                                className="rounded-full border border-[#7b102d] bg-white px-4 py-1.5 text-xs font-bold text-[#7b102d] disabled:opacity-50"
+                              >
+                                Save feedback
+                              </button>
+                              <button
+                                disabled={busy || row.status === 'Cancelled'}
+                                onClick={() =>
+                                  act(
+                                    () =>
+                                      fetch(`${API}/admin/appointments/status`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                                        body: JSON.stringify({
+                                          id: row.id,
+                                          action: 'cancel',
+                                          feedback: appointmentFeedbackDrafts[row.id] ?? row.feedback ?? '',
+                                        }),
+                                      }),
+                                    'Appointment cancelled.'
+                                  )
+                                }
+                                className="rounded-full bg-rose-600 px-4 py-1.5 text-xs font-bold text-white disabled:opacity-50"
+                              >
+                                Cancel meeting
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
               </div>
             )}
           </div>

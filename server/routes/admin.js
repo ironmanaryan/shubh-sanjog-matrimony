@@ -5,6 +5,7 @@ const { verifyTokenMiddleware, requireAdmin } = require('../middleware/auth');
 const { ROLES, ASSIGNABLE_ROLES, STAFF_ROLES, permissionsFor, requireStaffRole, requirePermission } = require('../middleware/rbac');
 const { listNotes, addNote } = require('../controllers/internalNotesController');
 const { listInquiries, updateInquiryStatus } = require('../controllers/inquiriesController');
+const { listAllAppointments, adminUpdateAppointmentStatus } = require('../controllers/appointmentsController');
 const { store, activateMembership, getPlan } = require('../data/store');
 const db = require('../db');
 const { auditTrail, writeAuditLog, clientIp } = require('../utils/audit');
@@ -890,6 +891,15 @@ router.post('/notes', verifyTokenMiddleware, requirePermission('addNotes'), audi
 router.get('/inquiries', verifyTokenMiddleware, requirePermission('viewQueues'), listInquiries);
 // POST /api/admin/inquiries/status { id, status, adminNote? } — triage an inquiry.
 router.post('/inquiries/status', verifyTokenMiddleware, requirePermission('reviewProfiles'), updateInquiryStatus);
+
+// --- Appointment Management (scope PDF §22 lifecycle) ------------------------
+// GET /api/admin/appointments — every appointment across all customers, sorted
+// by date desc. Staff-visible per §29. Used by the Appointment Management tab.
+router.get('/appointments', verifyTokenMiddleware, requireStaffRole, listAllAppointments);
+// POST /api/admin/appointments/status { id, action, feedback? } — drive a
+// booking to Completed / Cancelled (action: complete | cancel | submit_feedback).
+// Returns the new booking row + writes the audit-log entry + a notification.
+router.post('/appointments/status', verifyTokenMiddleware, requirePermission('reviewProfiles'), adminUpdateAppointmentStatus);
 
 // --- Audit log viewer (privacy spec §31) --------------------------------------
 // ADMIN role ONLY (not RM/staff): every administrative access to or change of

@@ -237,8 +237,8 @@ export default async function HomePage() {
                   Create Your Profile
                   <ArrowRight size={18} />
                 </Button>
-                <Button href="#plans" variant="outline" size="lg">
-                  View Membership Plans
+                <Button href="/customer/appointments" variant="outline" size="lg">
+                  Book a Consultation
                 </Button>
               </div>
             </Reveal>
@@ -554,13 +554,13 @@ export default async function HomePage() {
                 </div>
               </div>
 
-              <a
-                href="#plans"
+              <Link
+                href="/customer/appointments"
                 className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#f7d98b] px-5 py-3 text-sm font-bold text-[#4d0f21] transition-all duration-300 hover:scale-[1.02] hover:bg-[#f5cf71] hover:shadow-glow"
               >
                 Book a Consultation
                 <ArrowRight size={16} />
-              </a>
+              </Link>
               </div>
             </div>
           </Reveal>

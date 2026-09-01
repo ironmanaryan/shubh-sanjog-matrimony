@@ -20,6 +20,8 @@ type Booking = {
   type: string;
   notes: string;
   status: string;
+  feedback?: string | null;
+  completedAt?: number | null;
 };
 
 export default function AppointmentBooking() {
@@ -123,6 +125,32 @@ export default function AppointmentBooking() {
     }
   };
 
+  // Customer-side self-service: cancel an existing booking. Completion +
+  // feedback are admin-driven (PRD §22 lifecycle). We hard-block on
+  // past dates because cancelling a meeting we already held is meaningless
+  // to the customer and the admin should be the one to close it out.
+  async function cancelBooking(id: string) {
+    if (typeof window !== 'undefined' && !window.confirm('Cancel this appointment?')) return;
+    const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+    if (!token) {
+      setMessage('Please log in first.');
+      return;
+    }
+    try {
+      const res = await fetch(`${API}/appointments/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ id, action: 'cancel', feedback: notes || null }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Cancellation failed');
+      setMessage('Appointment cancelled.');
+      await loadData();
+    } catch (err: any) {
+      setMessage(err.message || 'Cancellation failed');
+    }
+  }
+
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       <div className="rounded-[28px] border border-[#f2d9a8] bg-white p-5 shadow-soft">
@@ -203,13 +231,34 @@ export default function AppointmentBooking() {
         ) : (
           <div className="mt-4 space-y-3">
             {bookings.map((item) => (
-              <div key={item.id} className="flex flex-col gap-2 rounded-2xl border border-[#f2d9a8] bg-[#fffaf3] p-4 sm:flex-row sm:items-center sm:justify-between">
+              <div key={item.id} className="flex flex-col gap-3 rounded-2xl border border-[#f2d9a8] bg-[#fffaf3] p-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <div className="text-sm font-bold text-[#2c0d16]">{item.type}</div>
                   <div className="text-sm text-[#5a3743]">{item.date} • {item.time}</div>
                   {item.notes && <div className="text-xs text-[#6a4a57]">Note: {item.notes}</div>}
+                  {item.feedback && <div className="text-xs italic text-[#6a4a57]">Feedback: {item.feedback}</div>}
                 </div>
-                <span className="inline-flex rounded-full bg-[#eaf8ef] px-2.5 py-1 text-[10px] font-bold uppercase text-[#0a7d4c]">{item.status}</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold uppercase ${
+                      item.status === 'Completed'
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : item.status === 'Cancelled'
+                        ? 'bg-rose-100 text-rose-700'
+                        : 'bg-[#eaf8ef] text-[#0a7d4c]'
+                    }`}
+                  >
+                    {item.status}
+                  </span>
+                  {item.status === 'Booked' && (
+                    <button
+                      onClick={() => cancelBooking(item.id)}
+                      className="rounded-full border border-[#f0b8b8] bg-white px-3 py-1.5 text-xs font-bold text-[#9b1f2f] hover:bg-[#fff0f0]"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>

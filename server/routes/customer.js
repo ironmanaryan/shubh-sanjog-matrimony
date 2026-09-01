@@ -284,6 +284,19 @@ async function getActivity(req, res) {
 
 router.get('/profile', verifyTokenMiddleware, getCustomerProfile);
 router.put('/profile', verifyTokenMiddleware, updateCustomerProfile);
+// GET /api/customer/membership — current customer's persisted membership row.
+// Used by the renewal banner on /customer and /customer/membership to surface
+// expiry / renewal CTAs without re-implementing `ensureMembership` client-side.
+router.get('/membership', verifyTokenMiddleware, async (req, res) => {
+  try {
+    const { ensureMembership } = require('../data/store');
+    const membership = ensureMembership(req.user.id) || null;
+    return res.json({ ok: true, membership });
+  } catch (err) {
+    console.error('getCustomerMembership error', err);
+    return res.status(500).json({ ok: false, error: 'Server error' });
+  }
+});
 // GET /api/customer/onboarding-status — PRD funnel snapshot (Registration ->
 // OTP -> Biodata -> Family -> Preferences -> Docs -> Submit -> Admin Review).
 // The dashboard renders this as the step-by-step progress tracker.

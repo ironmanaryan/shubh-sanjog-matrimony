@@ -8,6 +8,7 @@ import { Bell, BriefcaseBusiness, CheckCheck, ChevronRight, Circle, CircleCheckB
 import PrivacySettings from '../../components/customer/PrivacySettings';
 import RequestMeetingButton from '@/components/customer/RequestMeetingButton';
 import DocumentBadges from '@/components/customer/DocumentBadges';
+import MembershipExpiryBanner from '@/components/customer/MembershipExpiryBanner';
 import { compatibilityBadgeClass } from '@/lib/compatibility';
 import { buildMeetingRequestMessage } from '@/lib/whatsapp';
 import { API, requestJson } from '@/lib/api-client';
@@ -898,6 +899,7 @@ export default function CustomerDashboardPage() {
   return (
     <div className="min-h-screen bg-[#fffaf8] px-4 py-6 text-[#2c0d16] sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl">
+        <MembershipExpiryBanner />
         <div className="mb-6 flex flex-col gap-4 rounded-[28px] border border-[#f1d7a6] bg-white p-5 shadow-soft lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3.5">
             <Image
