@@ -183,11 +183,10 @@ export default async function HomePage() {
         <div aria-hidden="true" className="absolute -right-24 bottom-8 h-80 w-80 rounded-full bg-royal/10 blur-3xl" />
         <div aria-hidden="true" className="absolute inset-x-0 bottom-0 h-px gold-rule opacity-70" />
 
-        {/* Symmetrical 2-column grid: equal-width tracks, both cells stretching
-            to one shared row height so the frame aligns flush with the copy. */}
-        <div className="relative mx-auto grid max-w-7xl items-stretch gap-8 px-4 pb-10 pt-8 sm:gap-12 sm:px-6 sm:pb-16 sm:pt-14 lg:grid-cols-2 lg:gap-12 lg:pb-24 lg:pt-24 xl:gap-14">
-          {/* Left column — copy (vertically centred against the imagery) */}
-          <div className="order-2 flex flex-col justify-center lg:order-1">
+        {/* Responsive grid: 1 col mobile, 12-col desktop (6+6) with vertical centering */}
+        <div className="relative mx-auto grid max-w-7xl grid-cols-1 items-center gap-8 px-4 pb-10 pt-8 sm:gap-12 sm:px-6 sm:pb-16 sm:pt-14 lg:grid-cols-12 lg:gap-12 lg:pb-24 lg:pt-24 xl:gap-14">
+          {/* Left column — copy (text first on mobile, 6 cols desktop) */}
+          <div className="order-1 flex flex-col justify-center lg:col-span-6 lg:order-1">
             <Reveal>
               <span className="mb-6 inline-flex items-center gap-2 rounded-full border border-luxe-gold/60 bg-white/70 px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] text-royal shadow-luxe-sm backdrop-blur-md">
                 <Sparkles size={14} className="text-luxe-gold-deep" />
@@ -262,21 +261,18 @@ export default async function HomePage() {
             </Reveal>
           </div>
 
-          {/* Right column — traditional Indian bride & groom in royal wedding
-              attire. Height-capped on phones/tablets so the photo takes less
-              vertical space; stretches flush with the copy from lg up. */}
-          <Reveal delay={180} className="order-1 my-2 max-h-[320px] sm:max-h-[420px] lg:order-2 lg:my-0 lg:h-full">
-            <div className="relative mx-auto flex h-full w-full max-w-md flex-col justify-center sm:max-w-lg lg:max-w-none">
+          {/* Right column — Hero Image: prominent, grand, perfectly framed */}
+          <Reveal delay={180} className="order-2 flex w-full items-center justify-center lg:order-2 lg:col-span-6">
+            <div className="relative flex w-full max-w-2xl flex-col justify-center">
               {/* soft gold-maroon aura behind the frame */}
               <div
                 aria-hidden="true"
                 className="absolute -inset-5 rounded-[44px] bg-gradient-to-br from-luxe-gold/25 via-transparent to-royal/25 blur-2xl"
               />
 
-              <figure className="card-hover relative m-0 h-full w-full overflow-hidden rounded-[36px] border border-luxe-gold/60 bg-luxe-cream shadow-luxe">
-                {/* Mobile: capped height so the photo never eats the whole
-                    viewport; desktop: stretch flush with the copy column. */}
-                <div className="relative mx-auto aspect-[4/5] max-h-[320px] w-full sm:max-h-[420px] lg:max-h-none lg:aspect-auto lg:h-full lg:min-h-[540px]">
+              <figure className="card-hover relative m-0 w-full overflow-hidden rounded-[32px] border border-luxe-gold/60 bg-luxe-cream shadow-2xl">
+                {/* Image container: h-[480px] md:h-[550px] lg:h-[620px] w-full max-w-2xl */}
+                <div className="relative h-[480px] w-full max-w-2xl md:h-[550px] lg:h-[620px]">
                   <Image
                     src={HERO_IMAGE}
                     alt="Traditional Indian bride in a regal red lehenga beside the groom in an embroidered cream sherwani and maroon safa"
@@ -288,13 +284,14 @@ export default async function HomePage() {
                     sizes="(max-width: 768px) 100vw, 50vw"
                     placeholder="blur"
                     blurDataURL={HERO_BLUR_DATA_URL}
-                    className="object-cover object-center"
+                    className="object-cover object-top object-center"
+                    style={{ objectPosition: 'center top' }}
                   />
                   {/* warm gradient blend so the frame melts into the theme */}
                   <div aria-hidden="true" className="absolute inset-0 bg-gradient-to-t from-royal-deep/25 via-transparent to-transparent" />
                   <div aria-hidden="true" className="absolute inset-x-0 bottom-0 h-px gold-rule" />
 
-                  {/* floating accent chips — mirrored corners for symmetry */}
+                  {/* ROYAL WEDDINGS badge — top-left, neatly aligned */}
                   <span className="absolute left-4 top-4 inline-flex items-center gap-2 rounded-full border border-luxe-gold/60 bg-white/85 px-3.5 py-1.5 text-[11px] font-bold uppercase tracking-[0.14em] text-royal shadow-luxe-sm backdrop-blur-md sm:left-5 sm:top-5">
                     <Sparkles size={12} className="text-luxe-gold-deep" />
                     Royal Weddings
