@@ -247,18 +247,6 @@ export default async function HomePage() {
                 ))}
               </div>
             </Reveal>
-
-            <Reveal delay={600}>
-              <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm font-medium text-[#6f4a57]">
-                <Link href="/login" className="underline-offset-4 transition hover:text-royal hover:underline">
-                  Customer Login
-                </Link>
-                <span aria-hidden="true" className="hidden h-3.5 w-px bg-luxe-gold/60 sm:block" />
-                <Link href="/admin" className="underline-offset-4 transition hover:text-royal hover:underline">
-                  Admin Panel
-                </Link>
-              </div>
-            </Reveal>
           </div>
 
           {/* Right column — Hero Image: prominent, grand, perfectly framed */}
