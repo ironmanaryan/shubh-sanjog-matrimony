@@ -1,10 +1,17 @@
 import type { Metadata } from 'next';
 import { Amaranth, Inter } from 'next/font/google';
 import './globals.css';
+import dynamic from 'next/dynamic';
 import PublicLayout from '@/components/layout/public-layout';
 import SessionBridge from '@/components/SessionBridge';
 import { AuthProvider } from '@/components/auth/AuthProvider';
-import GoogleAuthRoot from '@/components/auth/GoogleAuthRoot';
+
+// Defer non-critical GIS provider to after hydration to reduce TBT / main-thread
+// blocking on first paint. `lazyOnload`-equivalent via dynamic + ssr:false.
+const GoogleAuthRoot = dynamic(() => import('@/components/auth/GoogleAuthRoot'), {
+  ssr: false,
+  loading: () => null,
+});
 
 const amaranth = Amaranth({
   weight: ['400', '700'],

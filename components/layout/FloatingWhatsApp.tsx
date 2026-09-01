@@ -37,17 +37,34 @@ export default function FloatingWhatsApp() {
 
   // Position is only computed client-side (post-hydration), so SSR output
   // keeps the static bottom-right classes and never mismatches.
+  // Defer DOM reads (window.innerWidth/innerHeight) to next frame to avoid
+  // forced synchronous layout reflow during initial hydration (Lighthouse Best Practices).
   useEffect(() => {
-    setPos(
-      clampToViewport({
-        x: window.innerWidth - BUTTON_SIZE - EDGE_MARGIN,
-        y: window.innerHeight - BUTTON_SIZE - EDGE_MARGIN,
-      })
-    );
+    let raf = 0;
+    let resizeRaf = 0;
+    const schedulePos = () => {
+      raf = requestAnimationFrame(() => {
+        setPos(
+          clampToViewport({
+            x: window.innerWidth - BUTTON_SIZE - EDGE_MARGIN,
+            y: window.innerHeight - BUTTON_SIZE - EDGE_MARGIN,
+          })
+        );
+      });
+    };
+    schedulePos();
     // Re-clamp if the window shrinks after the widget was dragged somewhere.
-    const onResize = () => setPos((p) => (p ? clampToViewport(p) : p));
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+    // Debounce with rAF to avoid layout thrash on resize.
+    const onResize = () => {
+      if (resizeRaf) cancelAnimationFrame(resizeRaf);
+      resizeRaf = requestAnimationFrame(() => setPos((p) => (p ? clampToViewport(p) : p)));
+    };
+    window.addEventListener('resize', onResize, { passive: true });
+    return () => {
+      cancelAnimationFrame(raf);
+      cancelAnimationFrame(resizeRaf);
+      window.removeEventListener('resize', onResize);
+    };
   }, []);
 
   const onPointerDown = (e: React.PointerEvent<HTMLAnchorElement>) => {

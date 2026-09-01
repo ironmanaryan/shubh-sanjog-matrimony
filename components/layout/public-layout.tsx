@@ -4,9 +4,16 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { Menu, X, Phone, MapPin, ShieldCheck, ChevronDown, UserRound, HelpCircle, FileText } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import FloatingWhatsApp from '@/components/layout/FloatingWhatsApp';
+import dynamic from 'next/dynamic';
 import WhatsAppIcon from '@/components/ui/whatsapp-icon';
 import AuthButtons from '@/components/auth/AuthButtons';
+
+// Defer non-critical WhatsApp widget to after user interaction / idle to
+// reduce main-thread blocking (TBT) on initial page load.
+const FloatingWhatsApp = dynamic(() => import('@/components/layout/FloatingWhatsApp'), {
+  ssr: false,
+  loading: () => null,
+});
 
 // ─── Developer credit (footer) ───────────────────────────────────────────────
 // Modular toggle: set `enabled` to false to hide the credit site-wide without

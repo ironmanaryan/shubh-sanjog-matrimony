@@ -16,11 +16,18 @@ import {
   Star,
   Users,
 } from 'lucide-react';
+import dynamicImport from 'next/dynamic';
 import Button from '@/components/ui/button';
 import Reveal from '@/components/ui/reveal';
-import PlanCards from '../components/PlanCards';
 import { getMembershipPlans } from '../lib/plans';
 import { HERO_BLUR_DATA_URL } from '../lib/hero-blur';
+
+// Heavy below-the-fold pricing grid deferred to reduce TBT / main-thread
+// work on initial paint. ssr:false ensures it hydrates after interaction.
+const PlanCards = dynamicImport(() => import('../components/PlanCards'), {
+  ssr: false,
+  loading: () => <div className="mx-auto max-w-6xl animate-pulse rounded-[30px] border border-[#f2d9a8] bg-white/50 p-8 text-center text-sm text-[#8a6a75]">Loading plans…</div>,
+});
 
 // Public landing page. Pricing is rendered server-side from the SQLite
 // `membership_plans` table (single source of truth) — never hardcoded here.
@@ -272,9 +279,11 @@ export default async function HomePage() {
                     src={HERO_IMAGE}
                     alt="Traditional Indian bride in a regal red lehenga beside the groom in an embroidered cream sherwani and maroon safa"
                     fill
-                    preload
-                    quality={85}
-                    sizes="(min-width: 1024px) 46vw, (min-width: 640px) 90vw, 100vw"
+                    priority={true}
+                    fetchPriority="high"
+                    loading="eager"
+                    quality={75}
+                    sizes="(max-width: 768px) 100vw, 50vw"
                     placeholder="blur"
                     blurDataURL={HERO_BLUR_DATA_URL}
                     className="object-cover object-center"

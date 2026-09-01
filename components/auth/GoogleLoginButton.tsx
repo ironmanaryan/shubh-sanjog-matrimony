@@ -228,17 +228,25 @@ export default function GoogleLoginButton({ redirectTo = '/customer', onClick }:
     } else {
       window.__gsiCallback = credentialCallback;
     }
-    container.innerHTML = '';
-    try {
-      gsi.renderButton(container, {
-        type: 'standard',
-        theme: 'outline',
-        size: 'large',
-        shape: 'pill',
-        text: 'continue_with',
-        width: container.offsetWidth || 320,
-      });
-    } catch {}
+    // Defer offsetWidth read to next frame to avoid forced synchronous layout
+    // reflow (Lighthouse Best Practices). Width is capped to container.
+    let raf = 0;
+    raf = requestAnimationFrame(() => {
+      if (!container.isConnected) return;
+      const width = container.offsetWidth || 320;
+      container.innerHTML = '';
+      try {
+        gsi.renderButton(container, {
+          type: 'standard',
+          theme: 'outline',
+          size: 'large',
+          shape: 'pill',
+          text: 'continue_with',
+          width,
+        });
+      } catch {}
+    });
+    return () => cancelAnimationFrame(raf);
   }, [hasClientId, gisReady]);
 
   const handleVisibleClick = useCallback(async () => {
