@@ -3,40 +3,17 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Suspense, useEffect, useRef, useState } from 'react';
-import { ArrowRight, Mail, Phone, ShieldCheck, ChevronDown, ChevronUp } from 'lucide-react';
-import OtpInput from '@/components/auth/OtpInput';
+import { Suspense, useEffect, useState } from 'react';
+import { ShieldCheck } from 'lucide-react';
 import GoogleLoginButton from '@/components/auth/GoogleLoginButton';
-import Button from '@/components/ui/button';
-import GlassCard from '@/components/ui/glass-card';
-import Loader from '@/components/ui/loader';
-import TextField from '@/components/ui/text-field';
-import { getSession, looksLikeEmail } from '@/lib/auth-client';
 import { getSupabase } from '@/lib/supabase';
-
-const EMPTY_OTP = ['', '', '', '', '', ''];
-
-interface FieldErrors {
-  fullName?: string;
-  email?: string;
-  phone?: string;
-}
 
 function RegisterPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectParam = searchParams.get('redirect') || searchParams.get('next') || '';
-  const [form, setForm] = useState({ fullName: '', email: '', phone: '' });
-  const [errors, setErrors] = useState<FieldErrors>({});
-  const [otpSent, setOtpSent] = useState(false);
-  const [otp, setOtp] = useState<string[]>(EMPTY_OTP);
   const [message, setMessage] = useState('');
   const [messageTone, setMessageTone] = useState<'info' | 'error' | 'success'>('info');
-  const [busy, setBusy] = useState(false);
-  const [showEmailForm, setShowEmailForm] = useState(false);
-  const otpCompleteRef = useRef(false);
-
-  const identifier = form.email.trim().toLowerCase();
 
   useEffect(() => {
     (async () => {
@@ -51,8 +28,6 @@ function RegisterPageInner() {
         } else if (profile && profile.is_completed === false) {
           router.replace('/register/fill-details?welcome=true');
         } else if (!profile) {
-          // No profile yet — check if user is via Google (has avatar) vs OTP
-          // For Google users with no profile, send to fill-details; for OTP users, stay on register to avoid loop
           const provider = (user.app_metadata as Record<string, unknown>)?.['provider'] as string;
           if (provider === 'google') {
             router.replace('/register/fill-details?welcome=true');
@@ -62,138 +37,12 @@ function RegisterPageInner() {
     })();
   }, [router]);
 
-  const handleFieldChange = (key: keyof typeof form, value: string) => {
-    setForm((current) => ({ ...current, [key]: value }));
-    setErrors((current) => ({ ...current, [key]: undefined }));
-  };
-
-  const notify = (text: string, tone: 'info' | 'error' | 'success' = 'info') => {
-    setMessage(text);
-    setMessageTone(tone);
-  };
-
-  const validate = (): boolean => {
-    const next: FieldErrors = {};
-    if (!form.fullName.trim()) next.fullName = 'Please enter your full name.';
-    if (!form.email.trim()) next.email = 'Please enter your email address.';
-    else if (!looksLikeEmail(form.email.trim())) next.email = 'Enter a valid email address.';
-    if (form.phone.trim() && !/^[+]?[\d\s-]{10,15}$/.test(form.phone.trim())) {
-      next.phone = 'Enter a valid mobile number.';
-    }
-    setErrors(next);
-    return Object.keys(next).length === 0;
-  };
-
-  const handleSendOtp = async () => {
-    if (!validate()) return;
-    setBusy(true);
-    try {
-      const supabase = getSupabase();
-      if (!supabase) {
-        notify('Cannot reach the authentication service. Please check your connection and try again.', 'error');
-        return;
-      }
-      const email = identifier;
-      const { data, error } = await supabase.auth.signInWithOtp({
-        email: email,
-        options: {
-          shouldCreateUser: true,
-          emailRedirectTo: undefined,
-        },
-      });
-      if (error) {
-        notify(error.message || 'Could not send OTP. Please try again.', 'error');
-        return;
-      }
-      setOtpSent(true);
-      setOtp(EMPTY_OTP);
-      otpCompleteRef.current = false;
-      notify('OTP sent to your email address. Please check your inbox.', 'success');
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Could not send OTP. Please try again.';
-      notify(msg, 'error');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleRegister = async (code: string) => {
-    if (otpCompleteRef.current) return;
-    if (!form.fullName.trim()) {
-      notify('Please add your full name.', 'error');
-      return;
-    }
-    if (!/^\d{6}$/.test(code)) {
-      notify('Please enter the complete 6-digit code.', 'error');
-      return;
-    }
-
-    otpCompleteRef.current = true;
-    setBusy(true);
-    try {
-      const supabase = getSupabase();
-      if (!supabase) {
-        otpCompleteRef.current = false;
-        notify('Cannot reach the authentication service. Please check your connection and try again.', 'error');
-        return;
-      }
-      const email = identifier;
-      const otpInput = code.trim();
-      const { data, error } = await supabase.auth.verifyOtp({
-        email: email,
-        token: otpInput,
-        type: 'email',
-      });
-      if (error) {
-        otpCompleteRef.current = false;
-        notify(error.message || 'Invalid or expired OTP. Please request a new code.', 'error');
-        return;
-      }
-      if (!data?.session || !data?.user) {
-        otpCompleteRef.current = false;
-        notify('Invalid or expired OTP. Please request a new code.', 'error');
-        return;
-      }
-      try {
-        localStorage.setItem('token', data.session.access_token);
-        localStorage.setItem(
-          'shubhSanjogUser',
-          JSON.stringify({
-            id: data.user.id,
-            identifier: email,
-            role: (data.user.app_metadata?.role as string) || 'customer',
-            fullName: form.fullName.trim(),
-          })
-        );
-        if (form.phone.trim()) {
-          try {
-            localStorage.setItem('pendingPhone', form.phone.trim());
-          } catch {}
-        }
-      } catch {}
-      if (redirectParam) {
-        router.push(redirectParam);
-      } else {
-        router.push('/customer/biodata');
-      }
-    } catch (e) {
-      otpCompleteRef.current = false;
-      const msg = e instanceof Error ? e.message : 'Registration failed. Please try again.';
-      notify(msg, 'error');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <div className="relative flex min-h-[100dvh] items-center justify-center bg-[#f8f5f0] px-4 py-6 sm:px-6 sm:py-10 lg:px-8">
-      {/* Subtle background - pointer-events-none ensures it never blocks clicks on desktop */}
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-gradient-to-b from-[#fffaf8] via-[#fffaf8] to-[#f8f5f0]" />
 
       <div className="relative z-10 w-full max-w-[440px] pointer-events-auto">
-        {/* Jeevansathi-style centered card */}
         <div className="overflow-hidden rounded-[20px] border border-[#e8e0d5] bg-white shadow-[0_8px_32px_rgba(0,0,0,0.08)] sm:rounded-[24px] pointer-events-auto">
-          {/* Header — official Shubh Sanjog logo */}
           <div className="px-6 pt-8 pb-6 text-center sm:px-8 sm:pt-10">
             <Image
               src="/logo.png"
@@ -207,176 +56,29 @@ function RegisterPageInner() {
             <p className="mx-auto mt-1.5 max-w-[320px] text-sm leading-5 text-[#6b5a64]">Join Shubh Sanjog Matrimony — find your perfect match</p>
           </div>
 
-          {/* Action options — Jeevansathi pill buttons */}
           <div className="px-5 pb-6 sm:px-8 sm:pb-8">
-            <div className="space-y-3">
-              {/* Primary: Continue with Google */}
-              <GoogleLoginButton redirectTo={redirectParam || '/customer'} />
-
-              {/* Secondary: Continue with Email — toggles form */}
-              <button
-                type="button"
-                onClick={() => setShowEmailForm((v) => !v)}
-                style={{ pointerEvents: 'auto', zIndex: 50 } as React.CSSProperties}
-                className="relative z-50 pointer-events-auto flex min-h-[48px] w-full touch-manipulation items-center justify-center gap-3 rounded-full border-2 border-royal bg-white px-6 py-3.5 text-[15px] font-semibold text-royal shadow-sm transition-all duration-200 hover:bg-royal/[0.04] active:scale-[0.98]"
-              >
-                <Mail size={18} className="text-royal" />
-                <span>Continue with Email</span>
-                {showEmailForm ? <ChevronUp size={16} className="ml-1 opacity-60" /> : <ChevronDown size={16} className="ml-1 opacity-60" />}
-              </button>
-
-              {/* Accent: Continue with Mobile Number — placeholder */}
-              <button
-                type="button"
-                onClick={() => notify('Mobile login coming soon. Please use Email or Google.', 'info')}
-                style={{ pointerEvents: 'auto', zIndex: 50 } as React.CSSProperties}
-                className="relative z-50 pointer-events-auto flex min-h-[48px] w-full touch-manipulation items-center justify-center gap-3 rounded-full bg-royal px-6 py-3.5 text-[15px] font-semibold text-white shadow-md transition-all duration-200 hover:bg-royal-deep hover:shadow-lg active:scale-[0.98]"
-              >
-                <Phone size={18} />
-                <span>Continue with Mobile Number</span>
-              </button>
-            </div>
-
-            {/* Divider - decorative line must not block clicks */}
-            <div className="relative my-6 flex items-center justify-center">
-              <div aria-hidden="true" className="pointer-events-none absolute inset-0 flex items-center">
-                <div className="w-full border-t border-[#f0e6d6]" />
+            <div className="flex flex-col items-center justify-center gap-4">
+              <div className="w-full">
+                <GoogleLoginButton redirectTo={redirectParam || '/customer'} />
               </div>
-              <span className="relative bg-white px-3 text-xs font-medium uppercase tracking-widest text-[#a08a76]">Or</span>
-            </div>
 
-            {/* Expanded Email Form — toggled by Secondary button */}
-            {showEmailForm && (
-              <div className="animate-fade-up rounded-2xl border border-[#f0e6d6] bg-[#fffaf8] p-4 sm:p-5">
-                <form
-                  className="space-y-4"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    if (!otpSent) void handleSendOtp();
-                    else void handleRegister(otp.join(''));
-                  }}
-                  noValidate
+              {message && (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className={`w-full rounded-xl px-3.5 py-3 text-sm font-medium leading-5 ${
+                    messageTone === 'error'
+                      ? 'border border-red-200 bg-red-50 text-[#9b1f2f]'
+                      : messageTone === 'success'
+                        ? 'border border-emerald-200 bg-emerald-50 text-[#0a7d4c]'
+                        : 'border border-[#e8d9c3] bg-[#fffaf1] text-[#5a3743]'
+                  }`}
                 >
-                  <div className="grid gap-4">
-                    <TextField
-                      id="fullName"
-                      label="Full name"
-                      type="text"
-                      autoComplete="name"
-                      value={form.fullName}
-                      onChange={(event) => handleFieldChange('fullName', event.target.value)}
-                      placeholder="Aarav Sharma"
-                      error={errors.fullName}
-                    />
-                    <TextField
-                      id="email"
-                      label="Email address"
-                      type="email"
-                      inputMode="email"
-                      autoComplete="email"
-                      value={form.email}
-                      onChange={(event) => handleFieldChange('email', event.target.value)}
-                      placeholder="you@example.com"
-                      error={errors.email}
-                    />
-                    <TextField
-                      id="phone"
-                      label="Mobile (optional)"
-                      type="tel"
-                      inputMode="tel"
-                      autoComplete="tel"
-                      value={form.phone}
-                      onChange={(event) => handleFieldChange('phone', event.target.value)}
-                      placeholder="+91 98765 43210"
-                      error={errors.phone}
-                      hint={!errors.phone ? 'For family contact & WhatsApp updates.' : undefined}
-                    />
-                  </div>
+                  {message}
+                </div>
+              )}
+            </div>
 
-                  {!otpSent ? (
-                    <Button
-                      type="submit"
-                      disabled={busy}
-                      className="min-h-[48px] w-full touch-manipulation py-3.5 text-[15px] active:scale-[0.98]"
-                    >
-                      {busy ? (
-                        <>
-                          <Loader variant="lotus" size="sm" />
-                          Sending code…
-                        </>
-                      ) : (
-                        <>
-                          <Mail size={16} />
-                          Send 6-digit code
-                        </>
-                      )}
-                    </Button>
-                  ) : (
-                    <div className="space-y-4">
-                      <div>
-                        <label className="mb-2 block text-sm font-semibold text-[#4d2c36]">Enter 6-digit code sent to {identifier}</label>
-                        <OtpInput
-                          idPrefix="register-otp"
-                          value={otp}
-                          onChange={setOtp}
-                          onComplete={(code) => void handleRegister(code)}
-                          disabled={busy}
-                        />
-                      </div>
-                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setOtpSent(false);
-                            setOtp(EMPTY_OTP);
-                            otpCompleteRef.current = false;
-                            notify('');
-                          }}
-                          className="inline-flex min-h-[44px] touch-manipulation items-center justify-center rounded-full px-4 py-2 text-sm font-semibold text-[#5a3743] transition hover:bg-royal/[0.06] hover:text-royal active:scale-[0.98]"
-                        >
-                          Edit details
-                        </button>
-                        <Button
-                          type="submit"
-                          disabled={busy || otp.join('').length !== 6}
-                          className="min-h-[48px] w-full touch-manipulation py-3.5 text-[15px] active:scale-[0.98] sm:w-auto sm:px-8"
-                        >
-                          {busy ? (
-                            <>
-                              <Loader variant="lotus" size="sm" />
-                              Verifying…
-                            </>
-                          ) : (
-                            <>
-                              Verify &amp; continue
-                              <ArrowRight size={16} />
-                            </>
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-
-                  {message && (
-                    <div
-                      role="status"
-                      aria-live="polite"
-                      className={`rounded-xl px-3.5 py-3 text-sm font-medium leading-5 ${
-                        messageTone === 'error'
-                          ? 'border border-red-200 bg-red-50 text-[#9b1f2f]'
-                          : messageTone === 'success'
-                            ? 'border border-emerald-200 bg-emerald-50 text-[#0a7d4c]'
-                            : 'border border-[#e8d9c3] bg-[#fffaf1] text-[#5a3743]'
-                      }`}
-                    >
-                      {message}
-                    </div>
-                  )}
-                </form>
-              </div>
-            )}
-
-            {/* Footer */}
             <p className="mt-6 text-center text-xs leading-5 text-[#8a7a85]">
               By continuing, you agree to our{' '}
               <Link href="/terms" className="font-semibold text-royal underline-offset-4 hover:underline">
@@ -397,7 +99,6 @@ function RegisterPageInner() {
           </div>
         </div>
 
-        {/* Trust footer */}
         <p className="mt-4 text-center text-xs text-[#a08a76] sm:mt-6">
           <ShieldCheck size={12} className="mr-1 inline text-luxe-gold-deep" />
           Trusted by 4,50,000+ families
