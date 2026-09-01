@@ -41,6 +41,52 @@ export function clearNextPath() {
 export type GoogleSignInResult = { ok: boolean; error?: string };
 
 /**
+ * Sign in with Google using a Google Identity Services (GIS) ID token.
+ *
+ * This is the "modern" path that the rest of the app now uses:
+ *   1. The page renders <GoogleLogin/> from @react-oauth/google.
+ *   2. The GIS popup returns an ID token in `credentialResponse.credential`.
+ *   3. We hand that token straight to Supabase via `signInWithIdToken` —
+ *      no full-page redirect, no `/auth/callback` round trip, no allow-list
+ *      registration against `redirectTo`.
+ *
+ * Returns `{ ok: true }` on success so it can synchronously trigger a
+ *      router.push to /customer. On failure, returns a human-readable
+ *      `error` so the caller can show it as inline UI feedback.
+ */
+export async function signInWithGoogleIdToken(idToken: string): Promise<GoogleSignInResult> {
+  const trimmed = idToken?.trim();
+  if (!trimmed) {
+    return { ok: false, error: 'Google did not return an ID token. Please try again.' };
+  }
+
+  const supabase = getSupabase();
+  if (!supabase) {
+    return {
+      ok: false,
+      error:
+        'Sign-in is not configured on this deployment. NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY must be set.',
+    };
+  }
+
+  if (typeof window === 'undefined') return { ok: false, error: 'Please retry from a browser.' };
+
+  try {
+    const { data, error } = await supabase.auth.signInWithIdToken({
+      provider: 'google',
+      token: trimmed,
+    });
+    if (error) return { ok: false, error: error.message || 'Google sign-in failed.' };
+    if (!data?.session || !data?.user) {
+      return { ok: false, error: 'Google sign-in did not return a session. Please try again.' };
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : 'Google sign-in failed.' };
+  }
+}
+
+/**
  * Kick off the Google OAuth flow.
  *
  * Resolves with `{ ok: true }` only when the browser is actually navigating

@@ -4,6 +4,7 @@ import './globals.css';
 import PublicLayout from '@/components/layout/public-layout';
 import SessionBridge from '@/components/SessionBridge';
 import { AuthProvider } from '@/components/auth/AuthProvider';
+import GoogleAuthRoot from '@/components/auth/GoogleAuthRoot';
 
 const amaranth = Amaranth({
   weight: ['400', '700'],
@@ -36,10 +37,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         {/* Keeps the Express API session in sync with the Supabase session. */}
         <SessionBridge />
-        {/* Shared "who is signed in" state for the header and every page. */}
-        <AuthProvider>
-          <PublicLayout>{children}</PublicLayout>
-        </AuthProvider>
+        {/* Wraps the tree in <GoogleOAuthProvider> when NEXT_PUBLIC_GOOGLE_CLIENT_ID
+            is set; otherwise renders children unchanged so the app keeps working
+            on deployments without a Google client. */}
+        <GoogleAuthRoot>
+          {/* Shared "who is signed in" state for the header and every page. */}
+          <AuthProvider>
+            <PublicLayout>{children}</PublicLayout>
+          </AuthProvider>
+        </GoogleAuthRoot>
       </body>
     </html>
   );
