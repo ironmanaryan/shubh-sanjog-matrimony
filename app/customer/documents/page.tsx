@@ -33,7 +33,6 @@ import {
   deleteCustomerDocument,
   downloadCustomerDocument,
   formatBytes,
-  listCustomerDocuments,
   type CustomerDocument,
   type DocumentType,
 } from '@/lib/document-api';
@@ -60,26 +59,84 @@ export default function DocumentsPage() {
   /**
    * DYNAMIC RE-FETCH.
    *
-   * Reads the customer's documents DIRECTLY from Supabase
-   * (`supabase.from('documents').select('*')`) so we never rely on the
-   * Express `/api/documents` route. The list is sorted newest-first by
-   * `uploaded_at` to match the previous UI ordering.
+   * Reads THIS customer's documents DIRECTLY from Supabase:
    *
-   * Called on mount AND immediately after every successful upload so the
-   * UI is always showing what the database actually contains. No local
-   * state is touched outside `setDocs(docs)` here.
+   *   1. `const { data: { user } } = await supabase.auth.getUser()` —
+   *      pull the authenticated user EXPLICITLY at the start so the
+   *      `user.id` we filter on is the canonical Supabase auth uid from
+   *      the same session we used for the INSERT.
+   *   2. Bail early if there's no session (`if (!user) return;`) — the
+   *      page never enters a "fake empty list" mode just because the
+   *      user isn't signed in yet.
+   *   3. `supabase.from('documents').select('*').eq('user_id', user.id)
+   *      .order('created_at', { ascending: false })` — direct DB
+   *      SELECT, filtered by the EXACT authenticated UUID, newest
+   *      row first. No Express fallback. No cached client copy.
+   *   4. State is `setDocs(docs)` with whatever the DB returned.
+   *      Never `setDocs([])` to "clear" on transient errors — the
+   *      previous value stays put so the customer's row doesn't
+   *      blink off during a refetch. We never inject placeholder /
+   *      optimistic / fake rows either.
+   *
+   * Called on mount AND immediately after every successful upload so
+   * the UI is always showing what the database actually contains.
    */
   const fetchDocuments = useCallback(async (): Promise<void> => {
-    try {
-      const next = await listCustomerDocuments();
-      next.sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0));
-      setDocs(next);
-    } catch (err) {
-      // If the direct query fails too, fall back to the server list.
-      // We never optimistically render fake rows here.
-      console.error('fetchDocuments failed:', err);
-      setDocs([]);
+    const supabase = getSupabase();
+    if (!supabase) {
+      console.warn('fetchDocuments skipped: supabase is not configured.');
+      return;
     }
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const userId = (user.id || '').trim();
+    if (!userId || /^undefined$/i.test(userId) || /^null$/i.test(userId)) return;
+
+    const { data: rows, error } = await supabase
+      .from('documents')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('fetchDocuments error:', error);
+      // Deliberately do NOT touch setDocs here — preserving the previous
+      // canonical list beats wiping the UI on a transient network hiccup.
+      return;
+    }
+    if (!Array.isArray(rows)) {
+      console.warn('fetchDocuments: non-array response, leaving state untouched.');
+      return;
+    }
+
+    // Map the DB rows into the `CustomerDocument` shape the UI expects.
+    // The DB columns we care about: id, user_id, document_type / doc_type,
+    // file_url / path / cloudinary_url, original_name, status, mimetype,
+    // size, uploaded_at / created_at, rejection_reason.
+    const next: CustomerDocument[] = rows.map((r: any) => {
+      const uploadedAt = Number(r.uploaded_at ?? r.created_at ?? 0) || Date.now();
+      const docType = (r.document_type ?? r.doc_type ?? 'other') as DocumentType;
+      const fileUrl =
+        typeof r.file_url === 'string'
+          ? r.file_url
+          : typeof r.cloudinary_url === 'string'
+            ? r.cloudinary_url
+            : typeof r.path === 'string'
+              ? r.path
+              : '';
+      return {
+        id: String(r.id),
+        name: String(r.original_name ?? (fileUrl ? fileUrl.split('/').pop() : 'document')),
+        uploadedAt,
+        status: (r.status as CustomerDocument['status']) || 'Pending Review',
+        documentType: docType,
+        rejectionReason: r.rejection_reason ?? null,
+        size: typeof r.size === 'number' ? r.size : undefined,
+        mimetype: typeof r.mimetype === 'string' ? r.mimetype : undefined,
+        source: 'direct',
+      };
+    });
+    setDocs(next);
   }, []);
 
   useEffect(() => {
