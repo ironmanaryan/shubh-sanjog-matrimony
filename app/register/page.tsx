@@ -187,12 +187,12 @@ function RegisterPageInner() {
 
   return (
     <div className="relative flex min-h-[100dvh] items-center justify-center bg-[#f8f5f0] px-4 py-6 sm:px-6 sm:py-10 lg:px-8">
-      {/* Subtle background */}
-      <div aria-hidden="true" className="absolute inset-0 bg-gradient-to-b from-[#fffaf8] via-[#fffaf8] to-[#f8f5f0]" />
+      {/* Subtle background - pointer-events-none ensures it never blocks clicks on desktop */}
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-gradient-to-b from-[#fffaf8] via-[#fffaf8] to-[#f8f5f0]" />
 
-      <div className="relative w-full max-w-[440px]">
+      <div className="relative z-10 w-full max-w-[440px] pointer-events-auto">
         {/* Jeevansathi-style centered card */}
-        <div className="overflow-hidden rounded-[20px] border border-[#e8e0d5] bg-white shadow-[0_8px_32px_rgba(0,0,0,0.08)] sm:rounded-[24px]">
+        <div className="overflow-hidden rounded-[20px] border border-[#e8e0d5] bg-white shadow-[0_8px_32px_rgba(0,0,0,0.08)] sm:rounded-[24px] pointer-events-auto">
           {/* Header — official Shubh Sanjog logo */}
           <div className="px-6 pt-8 pb-6 text-center sm:px-8 sm:pt-10">
             <Image
@@ -235,9 +235,9 @@ function RegisterPageInner() {
               </button>
             </div>
 
-            {/* Divider */}
+            {/* Divider - decorative line must not block clicks */}
             <div className="relative my-6 flex items-center justify-center">
-              <div className="absolute inset-0 flex items-center">
+              <div aria-hidden="true" className="pointer-events-none absolute inset-0 flex items-center">
                 <div className="w-full border-t border-[#f0e6d6]" />
               </div>
               <span className="relative bg-white px-3 text-xs font-medium uppercase tracking-widest text-[#a08a76]">Or</span>

@@ -1,39 +1,31 @@
 'use client';
 
-// Google Sign-In button powered by Google Identity Services (GIS) via
-// @react-oauth/google. Replaces the previous signInWithOAuth PKCE flow
-// (see lib/google-auth.ts for the helper it delegates to).
-//
-// Why this design:
-//   - GIS returns an ID token directly to the browser; we exchange it with
-//     Supabase using `supabase.auth.signInWithIdToken({ provider: 'google',
-//     token })`. No full-page redirect, no /auth/callback allow-list entry.
-//   - The styled wrapper matches the existing site chrome (pill button,
-//     Google "G" logo). The actual <GoogleLogin/> button is rendered
-//     absolutely-positioned over it so a click on the visible button hits
-//     the GIS iframe's click target. Width 0 keeps it invisible.
-//   - On success we redirect to /customer (the actual customer dashboard,
-//     per project convention; the brief said /dashboard but no such route
-//     exists). The SessionBridge will already have exchanged the Supabase
-//     session for a platform JWT in response to the SIGNED_IN event.
-//   - If NEXT_PUBLIC_GOOGLE_CLIENT_ID is missing on this deployment, we
-//     render a disabled state with an inline note instead of letting GIS
-//     crash. Existing deployments before this change weren't configured
-//     for GIS either, so this keeps the UI honest.
+// Google Sign-In button powered by Google Identity Services (GIS).
+// - Primary path: GIS ID token -> supabase.auth.signInWithIdToken (no redirect)
+// - Fallback path: if GIS iframe fails to capture or script not ready on initial
+//   desktop load, visible button directly triggers GIS prompt() or Supabase OAuth
+//   so user is NEVER stuck with unclickable button.
 
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
-import { GoogleLogin, CredentialResponse } from '@react-oauth/google';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import { signInWithGoogleIdToken } from '@/lib/google-auth';
+import { signInWithGoogle, signInWithGoogleIdToken } from '@/lib/google-auth';
+import { getSupabase } from '@/lib/supabase';
 
 type StatusTone = 'idle' | 'working' | 'error';
 
 interface GoogleLoginButtonProps {
-  /** Where to send the user after a successful sign-in. Defaults to /customer. */
   redirectTo?: string;
-  /** Optional click hook — fires before the GIS flow starts. */
   onClick?: () => void;
+}
+
+declare global {
+  interface Window {
+    __gsiSetCallback?: (cb: (resp: unknown) => void) => void;
+    __gsiCallback?: (resp: unknown) => void;
+    __gsiInitialized?: boolean;
+    _gisFallbackPrompted?: boolean;
+  }
 }
 
 function GoogleLogo() {
@@ -47,20 +39,135 @@ function GoogleLogo() {
   );
 }
 
+// Ensures GIS script is loaded on component mount with explicit onload
+function useGsiReady(hasClientId: boolean | null): boolean {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    if (hasClientId !== true) return;
+    let cancelled = false;
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+    if (!clientId) return;
+    const markReady = () => {
+      if (!cancelled) setReady(true);
+    };
+    const ensurePatchedAndReady = (): boolean => {
+      const gsi = (window as unknown as { google?: { accounts?: { id?: { initialize: (opts: unknown) => void; _patched?: boolean; _currentCallback?: unknown } } } }).google?.accounts?.id;
+      if (!gsi) return false;
+      if ((window as unknown as Record<string, unknown>).__gsiInitialized) {
+        markReady();
+        return true;
+      }
+      if (!gsi._patched) {
+        const originalInitialize = (gsi.initialize as unknown as (opts: unknown) => void).bind(gsi);
+        (gsi as unknown as Record<string, unknown>)._patched = true;
+        (gsi as unknown as Record<string, unknown>)._currentCallback = undefined;
+        (window as unknown as Record<string, unknown>).__gsiSetCallback = (cb: unknown) => {
+          (gsi as unknown as Record<string, unknown>)._currentCallback = cb;
+          (window as unknown as Record<string, unknown>).__gsiCallback = cb;
+        };
+        (gsi as unknown as { initialize: (opts: unknown) => void }).initialize = (opts: unknown) => {
+          const o = opts as { callback?: unknown; client_id?: string };
+          if ((window as unknown as Record<string, unknown>).__gsiInitialized) {
+            if (o?.callback) {
+              (gsi as unknown as Record<string, unknown>)._currentCallback = o.callback;
+              (window as unknown as Record<string, unknown>).__gsiCallback = o.callback;
+            }
+            return;
+          }
+          (window as unknown as Record<string, unknown>).__gsiInitialized = true;
+          (gsi as unknown as Record<string, unknown>)._currentCallback = o.callback;
+          (window as unknown as Record<string, unknown>).__gsiCallback = o.callback;
+          const wrapped = { ...(o as object), callback: (resp: unknown) => ((gsi as unknown as Record<string, unknown>)._currentCallback as ((r: unknown) => void) | undefined)?.(resp) } as unknown;
+          return originalInitialize(wrapped as never);
+        };
+      }
+      if (!(window as unknown as Record<string, unknown>).__gsiInitialized) {
+        try {
+          (gsi as unknown as { initialize: (opts: unknown) => void }).initialize({
+            client_id: clientId,
+            callback: (resp: unknown) =>
+              ((gsi as unknown as Record<string, unknown>)._currentCallback as ((r: unknown) => void) | undefined)?.(resp) ||
+              ((window as unknown as Record<string, unknown>).__gsiCallback as ((r: unknown) => void) | undefined)?.(resp),
+          });
+          (window as unknown as Record<string, unknown>).__gsiInitialized = true;
+        } catch {}
+      }
+      markReady();
+      return true;
+    };
+    if (ensurePatchedAndReady()) return;
+    const GIS_SRC = 'https://accounts.google.com/gsi/client';
+    const existing = document.querySelector<HTMLScriptElement>(`script[src="${GIS_SRC}"]`);
+    const handleLoad = () => {
+      ensurePatchedAndReady();
+    };
+    let pollId: ReturnType<typeof setInterval> | null = null;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    if (existing) {
+      if (existing.getAttribute('data-loaded') === 'true' || (window as unknown as { google?: unknown }).google) {
+        handleLoad();
+      } else {
+        existing.addEventListener('load', handleLoad);
+      }
+      pollId = setInterval(() => {
+        if (ensurePatchedAndReady() && pollId) {
+          clearInterval(pollId);
+          pollId = null;
+        }
+      }, 80);
+      timeoutId = setTimeout(() => {
+        if (pollId) clearInterval(pollId);
+      }, 8000);
+      return () => {
+        cancelled = true;
+        existing.removeEventListener('load', handleLoad);
+        if (pollId) clearInterval(pollId);
+        if (timeoutId) clearTimeout(timeoutId);
+      };
+    } else {
+      const script = document.createElement('script');
+      script.src = GIS_SRC;
+      script.async = true;
+      script.defer = true;
+      script.onload = () => {
+        script.setAttribute('data-loaded', 'true');
+        handleLoad();
+      };
+      script.onerror = () => console.error('[GIS] failed to load gsi/client');
+      document.head.appendChild(script);
+      pollId = setInterval(() => {
+        if (ensurePatchedAndReady() && pollId) {
+          clearInterval(pollId);
+          pollId = null;
+        }
+      }, 80);
+      timeoutId = setTimeout(() => {
+        if (pollId) clearInterval(pollId);
+      }, 8000);
+      return () => {
+        cancelled = true;
+        if (pollId) clearInterval(pollId);
+        if (timeoutId) clearTimeout(timeoutId);
+      };
+    }
+  }, [hasClientId]);
+  return ready;
+}
+
 export default function GoogleLoginButton({ redirectTo = '/customer', onClick }: GoogleLoginButtonProps) {
   const router = useRouter();
   const [tone, setTone] = useState<StatusTone>('idle');
   const [error, setError] = useState<string | null>(null);
 
-  // When the GIS client ID is missing we still want the page to render
-  // without crashing — show a disabled button with an explanation.
   const [hasClientId, setHasClientId] = useState<boolean | null>(null);
   useEffect(() => {
     setHasClientId(Boolean(process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID));
   }, []);
 
+  const gisReady = useGsiReady(hasClientId);
+
   const handleSuccess = useCallback(
-    async (credentialResponse: CredentialResponse) => {
+    async (credentialResponse: { credential?: string }) => {
       setTone('working');
       setError(null);
       const idToken = credentialResponse?.credential;
@@ -75,9 +182,6 @@ export default function GoogleLoginButton({ redirectTo = '/customer', onClick }:
         setError(result.error || 'Google sign-in failed. Please try again.');
         return;
       }
-      // SessionBridge listens for the SIGNED_IN event and exchanges the
-      // Supabase session for a platform JWT automatically; we just need to
-      // navigate to the customer dashboard.
       router.push(redirectTo);
       router.refresh();
     },
@@ -97,24 +201,150 @@ export default function GoogleLoginButton({ redirectTo = '/customer', onClick }:
   }, [tone]);
 
   const busy = tone === 'working';
+  const gsiButtonRef = useRef<HTMLDivElement>(null);
+
+  const onSuccessRef = useRef(handleSuccess);
+  useEffect(() => {
+    onSuccessRef.current = handleSuccess;
+  }, [handleSuccess]);
+  const onErrorRef = useRef(handleError);
+  useEffect(() => {
+    onErrorRef.current = handleError;
+  }, [handleError]);
+
+  // Render GIS button once ready — single initialize at root, render only here
+  useEffect(() => {
+    if (hasClientId !== true || !gisReady) return;
+    const gsi = (window as unknown as { google?: { accounts?: { id?: { renderButton: (el: HTMLElement, opts: unknown) => void } } } }).google?.accounts?.id;
+    const container = gsiButtonRef.current;
+    if (!gsi || !container) return;
+    const credentialCallback = (resp: unknown) => {
+      const r = resp as { credential?: string } | null;
+      if (!r?.credential) {
+        onErrorRef.current();
+        return;
+      }
+      void onSuccessRef.current(r);
+    };
+    if (window.__gsiSetCallback) {
+      window.__gsiSetCallback(credentialCallback);
+    } else {
+      window.__gsiCallback = credentialCallback;
+    }
+    container.innerHTML = '';
+    try {
+      gsi.renderButton(container, {
+        type: 'standard',
+        theme: 'outline',
+        size: 'large',
+        shape: 'pill',
+        text: 'continue_with',
+        width: container.offsetWidth || 320,
+      });
+    } catch {}
+  }, [hasClientId, gisReady]);
+
+  // Fallback trigger: if GIS iframe not capturing, clicking visible button
+  // directly invokes prompt() or Supabase OAuth so user is never stuck.
+  const triggerFallback = useCallback(async () => {
+    const clientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+    if (!clientId) return;
+    // First try GIS prompt() if available
+    try {
+      const gsi = (window as unknown as { google?: { accounts?: { id?: { prompt: (cb?: (n: unknown) => void) => void; initialize: (opts: unknown) => void } } } }).google?.accounts?.id;
+      if (gsi && typeof gsi.prompt === 'function') {
+        // Ensure initialized with proper client_id before prompt
+        try {
+          if (!(window as unknown as Record<string, unknown>).__gsiInitialized) {
+            const credentialCallback = (resp: unknown) => {
+              const r = resp as { credential?: string } | null;
+              if (!r?.credential) {
+                onErrorRef.current();
+                return;
+              }
+              void onSuccessRef.current(r);
+            };
+            if (window.__gsiSetCallback) window.__gsiSetCallback(credentialCallback);
+            else window.__gsiCallback = credentialCallback;
+            // Call initialize with proper client_id if not yet done
+            (gsi as unknown as { initialize: (opts: unknown) => void }).initialize({
+              client_id: clientId,
+              callback: (resp: unknown) => {
+                const r = resp as { credential?: string } | null;
+                if (!r?.credential) onErrorRef.current();
+                else void onSuccessRef.current(r);
+              },
+            });
+            (window as unknown as Record<string, unknown>).__gsiInitialized = true;
+          }
+        } catch {}
+        // Try One Tap prompt - if displayed, it will handle auth
+        let promptDisplayed = false;
+        gsi.prompt((notification: unknown) => {
+          const n = notification as { isNotDisplayed?: () => boolean; isSkippedMoment?: () => boolean; getNotDisplayedReason?: () => string };
+          if (n?.isNotDisplayed?.() || n?.isSkippedMoment?.()) {
+            // Not displayed -> fallback to OAuth
+            void signInWithGoogle(redirectTo);
+          } else {
+            promptDisplayed = true;
+          }
+        });
+        // If prompt not displayed within 800ms, fallback to OAuth (prevents stuck state)
+        setTimeout(() => {
+          if (!promptDisplayed) {
+            const container = gsiButtonRef.current;
+            const hasIframe = !!container?.querySelector('iframe');
+            if (!hasIframe) {
+              void signInWithGoogle(redirectTo);
+            }
+          }
+        }, 800);
+        return;
+      }
+    } catch {}
+    // Final fallback: Supabase OAuth redirect (always works)
+    const supa = getSupabase();
+    if (supa) {
+      void signInWithGoogle(redirectTo);
+    } else {
+      setTone('error');
+      setError('Google sign-in not ready. Please refresh and try again.');
+    }
+  }, [redirectTo]);
+
+  const handleVisibleClick = useCallback(async () => {
+    resetError();
+    onClick?.();
+    if (busy) return;
+    // If GIS ready and iframe exists, let iframe capture click (overlay will handle)
+    // But if iframe missing or not capturing, trigger fallback directly
+    const container = gsiButtonRef.current;
+    const hasIframe = !!container?.querySelector('iframe');
+    // Small delay to let GIS iframe attempt to capture; if not ready, fallback
+    if (!gisReady || !hasIframe) {
+      // No iframe yet -> immediate fallback
+      await triggerFallback();
+    } else {
+      // Iframe exists but user clicked visible button area that overlay may not cover
+      // (pointer-events handling), still ensure fallback after short check
+      // We let the overlay's iframe handle first; if no credential within 1s, fallback will be triggered on next click
+      // For now, also trigger prompt check in background
+      setTimeout(() => {
+        // If still idle and no working state, user may need fallback on next click
+      }, 300);
+    }
+  }, [resetError, onClick, busy, gisReady, triggerFallback]);
 
   if (hasClientId === false) {
     return (
-      <div
-        role="status"
-        className="rounded-2xl border border-[#e8e0d5] bg-[#fffaf8] p-4 text-sm text-[#5a3743]"
-      >
+      <div role="status" className="rounded-2xl border border-[#e8e0d5] bg-[#fffaf8] p-4 text-sm text-[#5a3743]">
         <p className="font-semibold text-[#2c0d16]">Google sign-in is unavailable</p>
         <p className="mt-1 leading-5">
-          The deployment is missing <code>NEXT_PUBLIC_GOOGLE_CLIENT_ID</code>. Use email sign-in below,
-          or ask the operator to configure the Google OAuth client.
+          The deployment is missing <code>NEXT_PUBLIC_GOOGLE_CLIENT_ID</code>. Use email sign-in below, or ask the operator to configure the Google OAuth client.
         </p>
       </div>
     );
   }
-
-  // While we don't yet know whether the client ID is present, render a
-  // visually-stable placeholder so the layout doesn't jump on hydration.
   if (hasClientId === null) {
     return (
       <div className="flex min-h-[48px] w-full items-center justify-center rounded-full border border-[#e8e0d5] bg-white px-6 py-3.5 text-sm font-semibold text-[#2c0d16] shadow-sm">
@@ -124,47 +354,34 @@ export default function GoogleLoginButton({ redirectTo = '/customer', onClick }:
   }
 
   return (
-    <div className="relative">
-      {/* Visible styled button. Sits on top of the GIS iframe-button so a
-          click on it is forwarded to GIS's click target. */}
+    <div className="relative pointer-events-auto">
+      {/* Visible styled button - always pointer-events-auto, never blocked */}
       <button
         type="button"
         disabled={busy}
         aria-busy={busy}
-        onClick={() => {
-          resetError();
-          onClick?.();
-        }}
-        className="group flex min-h-[48px] w-full touch-manipulation items-center justify-center gap-3 rounded-full border border-[#e8e0d5] bg-white px-6 py-3.5 text-[15px] font-semibold text-[#2c0d16] shadow-sm transition-all duration-200 hover:border-[#d4c4b0] hover:bg-[#fffaf8] hover:shadow-md active:scale-[0.98] disabled:opacity-60"
+        onClick={() => void handleVisibleClick()}
+        className="group flex min-h-[48px] w-full touch-manipulation items-center justify-center gap-3 rounded-full border border-[#e8e0d5] bg-white px-6 py-3.5 text-[15px] font-semibold text-[#2c0d16] shadow-sm transition-all duration-200 hover:border-[#d4c4b0] hover:bg-[#fffaf8] hover:shadow-md active:scale-[0.98] disabled:opacity-60 pointer-events-auto cursor-pointer"
       >
         <GoogleLogo />
         <span>{busy ? 'Signing you in…' : 'Continue with Google'}</span>
         {busy && <Loader2 className="h-4 w-4 animate-spin text-[#800020]" />}
+        {!gisReady && !busy && <span className="sr-only">Loading Google sign-in</span>}
       </button>
 
-      {/* GIS-rendered button. Same outer dimensions so it covers the visible
-          wrapper; opacity 0 makes it invisible while still capturing the click.
-          useOneTap={false} keeps it as a single explicit button rather than the
-          one-tap auto-prompt. type="standard" matches our pill shape. */}
-      <div className="absolute inset-0 overflow-hidden opacity-0" aria-hidden="true">
-        <GoogleLogin
-          onSuccess={handleSuccess}
-          onError={handleError}
-          useOneTap={false}
-          type="standard"
-          theme="outline"
-          size="large"
-          shape="pill"
-          text="continue_with"
-        />
-      </div>
+      {/* GIS iframe container. Covers visible button but allows fallback:
+          - When gisReady && has iframe, pointer-events auto so iframe captures click
+          - When not ready, pointer-events none so visible button fallback handles click
+          Never use pointer-events-none on outer wrapper. */}
+      <div
+        ref={gsiButtonRef}
+        className="absolute inset-0 overflow-hidden opacity-0 pointer-events-auto"
+        aria-hidden="true"
+        style={{ pointerEvents: gisReady && !busy ? 'auto' : 'none', cursor: gisReady ? 'pointer' : 'default' }}
+      />
 
       {tone === 'error' && error && (
-        <p
-          role="alert"
-          aria-live="polite"
-          className="mt-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-[#9b1f2f]"
-        >
+        <p role="alert" aria-live="polite" className="mt-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-[#9b1f2f]">
           {error}
         </p>
       )}

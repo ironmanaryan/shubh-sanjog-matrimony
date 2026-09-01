@@ -142,12 +142,12 @@ function LoginPageInner() {
 
   return (
     <div className="relative flex min-h-[100dvh] items-center justify-center overflow-hidden bg-[#fffaf8] px-4 py-6 sm:px-6 sm:py-12 lg:px-8">
-      {/* Background — subtle on mobile to keep fast, rich on desktop */}
-      <div aria-hidden="true" className="absolute inset-0 bg-royal-silk opacity-60 sm:opacity-100" />
-      <div aria-hidden="true" className="absolute -left-20 top-10 h-64 w-64 rounded-full bg-luxe-gold/20 blur-3xl sm:h-72 sm:w-72 sm:bg-luxe-gold/25" />
-      <div aria-hidden="true" className="absolute -bottom-20 right-0 h-64 w-64 rounded-full bg-luxe-gold-deep/15 blur-3xl sm:h-80 sm:w-80 sm:bg-luxe-gold-deep/20" />
+      {/* Background — subtle on mobile to keep fast, rich on desktop - never block pointer events */}
+      <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-royal-silk opacity-60 sm:opacity-100" />
+      <div aria-hidden="true" className="pointer-events-none absolute -left-20 top-10 h-64 w-64 rounded-full bg-luxe-gold/20 blur-3xl sm:h-72 sm:w-72 sm:bg-luxe-gold/25" />
+      <div aria-hidden="true" className="pointer-events-none absolute -bottom-20 right-0 h-64 w-64 rounded-full bg-luxe-gold-deep/15 blur-3xl sm:h-80 sm:w-80 sm:bg-luxe-gold-deep/20" />
 
-      <GlassCard className="relative mx-auto w-full max-w-5xl overflow-hidden !rounded-[24px] p-0 shadow-soft sm:!rounded-[32px]">
+      <GlassCard className="relative z-10 mx-auto w-full max-w-5xl overflow-hidden !rounded-[24px] p-0 shadow-soft sm:!rounded-[32px] pointer-events-auto">
         <div className="grid lg:grid-cols-[0.9fr_1.1fr]">
           {/* Brand panel — hidden on mobile for speed & focus */}
           <div className="relative hidden flex-col justify-between overflow-hidden bg-gradient-to-br from-royal via-royal-deep to-[#3F0010] p-8 text-white lg:flex lg:p-10">
@@ -191,7 +191,7 @@ function LoginPageInner() {
             <GoogleLoginButton redirectTo={redirectParam || '/customer'} />
 
             <div className="relative my-6 flex items-center justify-center">
-              <div className="absolute inset-0 flex items-center">
+              <div aria-hidden="true" className="pointer-events-none absolute inset-0 flex items-center">
                 <div className="w-full border-t border-[#f0e6d6]" />
               </div>
               <span className="relative bg-white px-3 text-xs font-medium uppercase tracking-widest text-[#a08a76]">Or continue with email</span>
