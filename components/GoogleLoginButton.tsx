@@ -1,16 +1,15 @@
 'use client';
 
-// Google Sign-In button powered by Google Identity Services (GIS).
-// - Primary: GIS ID token -> supabase.auth.signInWithIdToken
-// - Fallback: if GIS prompt is blocked (aria-hidden focus, FedCM, 3P cookies),
-//   immediate fallback to Supabase OAuth so user is never stuck.
-//   This fixes "Blocked aria-hidden on an element because its descendant
-//   retained focus."
+// Google Sign-In button - desktop reliable without GIS overlay blocking
+// - Initializes GIS with proper client_id at root
+// - Visible button has direct onClick fallback to Supabase OAuth so desktop
+//   never stuck if GIS iframe/prompt is blocked (FedCM, aria-hidden focus, 3P cookies)
+//   Fallback MUST execute: await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: `${window.location.origin}/auth/callback` } })
 
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import { signInWithGoogle, signInWithGoogleIdToken } from '@/lib/google-auth';
+import { signInWithGoogleIdToken } from '@/lib/google-auth';
 import { getSupabase } from '@/lib/supabase';
 
 type StatusTone = 'idle' | 'working' | 'error';
@@ -242,32 +241,6 @@ export default function GoogleLoginButton({ redirectTo = '/customer', onClick }:
     } catch {}
   }, [hasClientId, gisReady]);
 
-  // Fallback that guarantees login: prompt() with immediate OAuth fallback
-  const triggerOAuthFallback = useCallback(async () => {
-    const result = await signInWithGoogle(redirectTo);
-    if (!result.ok) {
-      // Fallback direct supabase call if helper fails to redirect
-      try {
-        const supabase = getSupabase();
-        if (supabase) {
-          const { data, error } = await supabase.auth.signInWithOAuth({
-            provider: 'google',
-            options: { redirectTo: `${window.location.origin}/auth/callback` },
-          });
-          if (error) {
-            setTone('error');
-            setError(error.message || 'Google sign-in failed. Please try again.');
-          } else if (data?.url) {
-            window.location.assign(data.url);
-          }
-        }
-      } catch (e) {
-        setTone('error');
-        setError(e instanceof Error ? e.message : 'Google sign-in failed.');
-      }
-    }
-  }, [redirectTo]);
-
   const handleVisibleClick = useCallback(async () => {
     resetError();
     onClick?.();
@@ -280,11 +253,10 @@ export default function GoogleLoginButton({ redirectTo = '/customer', onClick }:
       return;
     }
 
-    // Ensure initialize is called with proper client_id before any prompt
+    // Ensure GIS is initialized with proper client_id before any prompt
     try {
       const gsi = (window as unknown as { google?: { accounts?: { id?: { initialize: (opts: unknown) => void; prompt: (cb?: (n: unknown) => void) => void; _patched?: boolean } } } }).google?.accounts?.id;
       if (gsi) {
-        // Ensure callback is registered for this click
         const credentialCallback = (resp: unknown) => {
           const r = resp as { credential?: string } | null;
           if (!r?.credential) {
@@ -295,8 +267,6 @@ export default function GoogleLoginButton({ redirectTo = '/customer', onClick }:
         };
         if (window.__gsiSetCallback) window.__gsiSetCallback(credentialCallback);
         else window.__gsiCallback = credentialCallback;
-
-        // If not yet initialized at all, initialize now with proper client_id
         if (!(window as unknown as Record<string, unknown>).__gsiInitialized) {
           try {
             (gsi as unknown as { initialize: (opts: unknown) => void }).initialize({
@@ -310,64 +280,74 @@ export default function GoogleLoginButton({ redirectTo = '/customer', onClick }:
             (window as unknown as Record<string, unknown>).__gsiInitialized = true;
           } catch {}
         }
-
-        // Attempt prompt() but wrap immediate fallback
-        // prompt() is the GIS One Tap / FedCM flow. It can be blocked by
-        // aria-hidden focus issues, third-party cookie blocking, or FedCM.
-        // We check skipped/notDisplayed and fallback to OAuth.
-        let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+        // Attempt GIS prompt with immediate fallback to OAuth if blocked/skipped
         let fallbackFired = false;
-        const doFallback = () => {
+        const doOAuthFallback = async () => {
           if (fallbackFired) return;
           fallbackFired = true;
-          if (fallbackTimer) clearTimeout(fallbackTimer);
-          void triggerOAuthFallback();
+          const supabase = getSupabase();
+          if (!supabase) {
+            setTone('error');
+            setError('Authentication service not configured.');
+            return;
+          }
+          // Explicit fallback MUST execute this exact call for desktop reliability
+          const { data, error } = await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: `${window.location.origin}/auth/callback` } });
+          if (error) {
+            setTone('error');
+            setError(error.message || 'Google sign-in failed. Please try again.');
+          } else if (data?.url) {
+            window.location.assign(data.url);
+          }
         };
-
-        // Fallback timer: if prompt doesn't resolve within 900ms, go OAuth
-        fallbackTimer = setTimeout(() => {
-          doFallback();
-        }, 900);
-
+        let fallbackTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => void doOAuthFallback(), 900);
         try {
           gsi.prompt((notification: unknown) => {
             const n = notification as {
               isNotDisplayed?: () => boolean;
               isSkippedMoment?: () => boolean;
               isDismissedMoment?: () => boolean;
-              getNotDisplayedReason?: () => string;
-              getSkippedReason?: () => string;
             };
             const notDisplayed = n?.isNotDisplayed?.() ?? false;
             const skipped = n?.isSkippedMoment?.() ?? false;
             const dismissed = n?.isDismissedMoment?.() ?? false;
             if (notDisplayed || skipped || dismissed) {
-              // GIS prompt blocked/skipped -> immediately fallback to OAuth
-              // This handles "Blocked aria-hidden" and FedCM blocks
               if (fallbackTimer) clearTimeout(fallbackTimer);
-              doFallback();
+              void doOAuthFallback();
             } else {
-              // Prompt displayed — clear fallback timeout, credential will come via callback
               if (fallbackTimer) clearTimeout(fallbackTimer);
-              // Keep timeout as safety: if no credential after 2s, fallback
-              fallbackTimer = setTimeout(() => doFallback(), 2000);
+              fallbackTimer = setTimeout(() => void doOAuthFallback(), 2000);
             }
           });
-          // If prompt is available, we attempted it — don't immediately OAuth, let callback decide
-          // The timeout above will trigger fallback if needed
           return;
         } catch {
           if (fallbackTimer) clearTimeout(fallbackTimer);
-          // prompt threw -> immediate OAuth fallback
-          await triggerOAuthFallback();
+          await doOAuthFallback();
           return;
         }
       }
     } catch {}
 
-    // No GIS available or prompt not supported -> direct OAuth
-    await triggerOAuthFallback();
-  }, [resetError, onClick, busy, triggerOAuthFallback]);
+    // No GIS or prompt failed — direct Supabase OAuth fallback (desktop reliable)
+    try {
+      const supabase = getSupabase();
+      if (!supabase) {
+        setTone('error');
+        setError('Authentication service not configured.');
+        return;
+      }
+      const { data, error } = await supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: `${window.location.origin}/auth/callback` } });
+      if (error) {
+        setTone('error');
+        setError(error.message || 'Google sign-in failed. Please try again.');
+      } else if (data?.url) {
+        window.location.assign(data.url);
+      }
+    } catch (e) {
+      setTone('error');
+      setError(e instanceof Error ? e.message : 'Google sign-in failed.');
+    }
+  }, [resetError, onClick, busy]);
 
   if (hasClientId === false) {
     return (
@@ -388,28 +368,27 @@ export default function GoogleLoginButton({ redirectTo = '/customer', onClick }:
   }
 
   return (
-    <div className="relative pointer-events-auto">
-      {/* Visible styled button - always pointer-events-auto, never blocked */}
+    <div className="relative pointer-events-auto" style={{ zIndex: 1 }}>
       <button
         type="button"
         disabled={busy}
         aria-busy={busy}
         onClick={() => void handleVisibleClick()}
-        className="group flex min-h-[48px] w-full touch-manipulation items-center justify-center gap-3 rounded-full border border-[#e8e0d5] bg-white px-6 py-3.5 text-[15px] font-semibold text-[#2c0d16] shadow-sm transition-all duration-200 hover:border-[#d4c4b0] hover:bg-[#fffaf8] hover:shadow-md active:scale-[0.98] disabled:opacity-60 pointer-events-auto cursor-pointer"
+        style={{ pointerEvents: 'auto', zIndex: 50 } as React.CSSProperties}
+        className="group relative z-50 flex min-h-[48px] w-full touch-manipulation items-center justify-center gap-3 rounded-full border border-[#e8e0d5] bg-white px-6 py-3.5 text-[15px] font-semibold text-[#2c0d16] shadow-sm transition-all duration-200 hover:border-[#d4c4b0] hover:bg-[#fffaf8] hover:shadow-md active:scale-[0.98] disabled:opacity-60 pointer-events-auto cursor-pointer"
       >
         <GoogleLogo />
         <span>{busy ? 'Signing you in…' : 'Continue with Google'}</span>
         {busy && <Loader2 className="h-4 w-4 animate-spin text-[#800020]" />}
       </button>
 
-      {/* Hidden GIS renderButton container - NOT aria-hidden to avoid focus block.
-          Keeps opacity-0 but without aria-hidden so descendant iframe can retain focus
-          without triggering "Blocked aria-hidden" console error. */}
+      {/* Hidden GIS renderButton container - no aria-hidden to avoid focus block,
+          pointer-events none so it never blocks direct button click → OAuth fallback */}
       <div
         ref={gsiButtonRef}
-        className="absolute inset-0 overflow-hidden opacity-0 pointer-events-auto"
+        className="absolute inset-0 overflow-hidden opacity-0 pointer-events-none"
         aria-hidden={undefined}
-        style={{ pointerEvents: gisReady && !busy ? 'auto' : 'none', cursor: gisReady ? 'pointer' : 'default' } as React.CSSProperties}
+        style={{ pointerEvents: 'none' } as React.CSSProperties}
       />
 
       {tone === 'error' && error && (

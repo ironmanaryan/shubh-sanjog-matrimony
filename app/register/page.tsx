@@ -217,7 +217,8 @@ function RegisterPageInner() {
               <button
                 type="button"
                 onClick={() => setShowEmailForm((v) => !v)}
-                className="flex min-h-[48px] w-full touch-manipulation items-center justify-center gap-3 rounded-full border-2 border-royal bg-white px-6 py-3.5 text-[15px] font-semibold text-royal shadow-sm transition-all duration-200 hover:bg-royal/[0.04] active:scale-[0.98]"
+                style={{ pointerEvents: 'auto', zIndex: 50 } as React.CSSProperties}
+                className="relative z-50 pointer-events-auto flex min-h-[48px] w-full touch-manipulation items-center justify-center gap-3 rounded-full border-2 border-royal bg-white px-6 py-3.5 text-[15px] font-semibold text-royal shadow-sm transition-all duration-200 hover:bg-royal/[0.04] active:scale-[0.98]"
               >
                 <Mail size={18} className="text-royal" />
                 <span>Continue with Email</span>
@@ -228,7 +229,8 @@ function RegisterPageInner() {
               <button
                 type="button"
                 onClick={() => notify('Mobile login coming soon. Please use Email or Google.', 'info')}
-                className="flex min-h-[48px] w-full touch-manipulation items-center justify-center gap-3 rounded-full bg-royal px-6 py-3.5 text-[15px] font-semibold text-white shadow-md transition-all duration-200 hover:bg-royal-deep hover:shadow-lg active:scale-[0.98]"
+                style={{ pointerEvents: 'auto', zIndex: 50 } as React.CSSProperties}
+                className="relative z-50 pointer-events-auto flex min-h-[48px] w-full touch-manipulation items-center justify-center gap-3 rounded-full bg-royal px-6 py-3.5 text-[15px] font-semibold text-white shadow-md transition-all duration-200 hover:bg-royal-deep hover:shadow-lg active:scale-[0.98]"
               >
                 <Phone size={18} />
                 <span>Continue with Mobile Number</span>
