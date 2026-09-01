@@ -6,10 +6,12 @@ import PublicLayout from '@/components/layout/public-layout';
 import SessionBridge from '@/components/SessionBridge';
 import { AuthProvider } from '@/components/auth/AuthProvider';
 
-// Defer non-critical GIS provider to after hydration to reduce TBT / main-thread
-// blocking on first paint. `lazyOnload`-equivalent via dynamic + ssr:false.
+// Defer non-critical GIS provider to reduce TBT / main-thread blocking.
+// `ssr:false` is omitted because this file is a Server Component and Next 16
+// forbids `ssr:false` inside Server Components (Vercel build would fail).
+// The dynamic import still code-splits and defers the chunk; GIS script
+// itself loads lazyOnload inside the provider.
 const GoogleAuthRoot = dynamic(() => import('@/components/auth/GoogleAuthRoot'), {
-  ssr: false,
   loading: () => null,
 });
 

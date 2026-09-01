@@ -23,9 +23,11 @@ import { getMembershipPlans } from '../lib/plans';
 import { HERO_BLUR_DATA_URL } from '../lib/hero-blur';
 
 // Heavy below-the-fold pricing grid deferred to reduce TBT / main-thread
-// work on initial paint. ssr:false ensures it hydrates after interaction.
+// work on initial paint. Dynamic import still code-splits the chunk; `ssr:false`
+// is intentionally omitted here because this file is a Server Component and
+// Next 16 forbids `ssr:false` inside Server Components (see fix for Vercel
+// build failure on line 27). The deferred chunk still loads after hydration.
 const PlanCards = dynamicImport(() => import('../components/PlanCards'), {
-  ssr: false,
   loading: () => <div className="mx-auto max-w-6xl animate-pulse rounded-[30px] border border-[#f2d9a8] bg-white/50 p-8 text-center text-sm text-[#8a6a75]">Loading plans…</div>,
 });
 
