@@ -134,6 +134,18 @@ const suggestedProfiles: FeaturedProfile[] = [
     community: 'Maratha',
   },
   {
+    id: 'vikram-patil',
+    name: 'Vikram Patil',
+    initials: 'VP',
+    gender: 'groom',
+    age: '29 Yrs',
+    height: "5'10\"",
+    profession: 'Doctor',
+    qualification: 'MBBS',
+    location: 'Pune',
+    community: 'Maratha',
+  },
+  {
     id: 'priya-verma',
     name: 'Priya Verma',
     initials: 'PV',
@@ -155,6 +167,18 @@ const suggestedProfiles: FeaturedProfile[] = [
     profession: 'Assistant Professor',
     qualification: 'M.Sc',
     location: 'Nagpur',
+    community: 'Brahmin',
+  },
+  {
+    id: 'ananya-sharma',
+    name: 'Ananya Sharma',
+    initials: 'AS',
+    gender: 'bride',
+    age: '25 Yrs',
+    height: "5'6\"",
+    profession: 'Lawyer',
+    qualification: 'LLB',
+    location: 'Mumbai',
     community: 'Brahmin',
   },
 ];
@@ -383,8 +407,8 @@ export default async function HomePage() {
           </p>
         </Reveal>
 
-        {/* 1-column stack on mobile → 2×2 grid from md up. */}
-        <div className="grid grid-cols-1 items-stretch gap-6 md:grid-cols-2">
+        {/* Responsive: 1 col mobile (stacked) → 2 cols tablet → 3 cols desktop (2 rows of 3, total 6) */}
+        <div className="grid grid-cols-1 items-stretch gap-6 md:grid-cols-2 lg:grid-cols-3">
           {suggestedProfiles.map((profile, index) => {
             const theme = avatarStyles[profile.gender];
             return (
