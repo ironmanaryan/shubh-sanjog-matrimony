@@ -1,14 +1,12 @@
 'use client'
 
 /**
- * Document & Kundli management — `/customer/documents`.
+ * Document & Kundli management - `/customer/documents`.
  *
- * Pipeline: pick any file → client-side compression to ~4-20 KB → upload via
- * the Express `/api/documents/upload` endpoint → live list updates with
- * View/Download and Delete actions. Same component renders both the upload
- * box and the listing; verified badges are rendered separately by
- * `components/customer/DocumentBadges.tsx` so the customer dashboard stays
- * legible.
+ * Pipeline: pick any file -> client-side compression to ~4-20 KB -> DIRECT
+ * Supabase Storage upload + INSERT into `documents` table -> React state
+ * updated immediately so the row appears in "My Documents" the same frame
+ * the upload resolves. No `/api/documents/upload` round trip is made.
  */
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -42,9 +40,6 @@ const docTypeLabels: Record<string, string> = {
   other: 'Other',
 };
 
-// Friendly upload category → server-side document_type. Keep in sync with
-// `server/controllers/documentsController.js` (the `identity` default is also
-// mirrored there).
 const DOCUMENT_TYPES: { value: DocumentType; label: string }[] = [
   { value: 'identity', label: 'Identity Proof (Govt ID)' },
   { value: 'address', label: 'Address Proof' },
@@ -76,7 +71,7 @@ function formatDate(ms: number) {
       day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit',
     });
   } catch {
-    return '—';
+    return '\u2014';
   }
 }
 
@@ -88,42 +83,33 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [docType, setDocType] = useState<DocumentType>('identity');
   const fileRef = useRef<HTMLInputElement | null>(null);
-
-  const refresh = async () => {
-    const docs = await listCustomerDocuments();
-    // sort newest first
-    docs.sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0));
-    setItems(docs);
-  };
-
-  /**
-   * Toast helper — used for upload status instead of `alert()` so the user
-   * can keep reading the page. `alert()` was the source of the broken-HTML
-   * dialog in the previous bug report: the upload route used to return HTML
-   * on failure and `alert(err.message)` pasted the markup straight into a
-   * modal. The error path now returns JSON; the toast here keeps that
-   * promise and lets you still dismiss with a click.
-   */
   const [toast, setToast] = useState<{ kind: 'success' | 'error' | 'info'; message: string } | null>(null);
+
   function showToast(kind: 'success' | 'error' | 'info', message: string) {
     setToast({ kind, message });
     setTimeout(() => setToast((cur) => (cur && cur.message === message ? null : cur)), 4500);
   }
 
+  const refresh = async () => {
+    const docs = await listCustomerDocuments();
+    docs.sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0));
+    setItems(docs);
+  };
+
   useEffect(() => {
     void refresh();
-    // re-fetch when the tab regains focus so the list stays accurate after
-    // the user closes/reopens the page.
     const onFocus = () => void refresh();
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, []);
 
   /**
-   * Pick a file, compress in the browser, then upload. We never feed the raw
-   * picked bytes to the server — `uploadCompressedDocument` always passes
-   * the post-compression payload, and the API client falls back to direct
-   * Supabase Storage when the Express route 5xxs.
+   * Pick a file, compress in the browser, then upload DIRECTLY to Supabase
+   * Storage + INSERT into the documents table. NO `/api/documents/upload`
+   * call is made. The React state (`items`) is updated immediately when
+   * the Supabase INSERT returns its canonical row, so the document appears
+   * under "My Documents" the instant the round-trip completes, without a
+   * page refresh, without touching the Express API route.
    */
   async function handleUpload() {
     const file = fileRef.current?.files?.[0];
@@ -133,49 +119,58 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
     }
     setUploading(true);
     setUploadProgress(0);
-    setPhaseMessage(`Compressing ${file.name} (${formatBytes(file.size)})…`);
+    setPhaseMessage(`Compressing ${file.name} (${formatBytes(file.size)})\u2026`);
 
     try {
-      const { record, compressed, usedFallback } = await uploadCompressedDocument(file, docType, {
+      const { record, compressed } = await uploadCompressedDocument(file, docType, {
         onProgress: (pct) => {
-          setUploadProgress(Math.min(80, Math.round(pct * 0.8))); // 0-80% reserved for compression
-          if (pct < 30) setPhaseMessage(`Reading source (${formatBytes(file.size)})…`);
-          else if (pct < 90) setPhaseMessage(`Compressing…`);
-          else setPhaseMessage('Uploading…');
+          // Compression accounts for the first half of the bar; the upload
+          // claim runs 50 -> 100. Customers want to see motion both before
+          // and after the network round-trip fires.
+          const mapped =
+            pct < 50
+              ? Math.round(pct * 0.5)
+              : Math.min(100, Math.round(50 + (pct - 50) * 1.0));
+          setUploadProgress(mapped);
+          if (pct < 30) setPhaseMessage(`Reading source (${formatBytes(file.size)})\u2026`);
+          else if (pct < 50) setPhaseMessage('Compressing\u2026');
+          else if (pct < 95) setPhaseMessage('Uploading to Supabase Storage\u2026');
+          else setPhaseMessage('Saving record\u2026');
         },
       });
-      setUploadProgress(95);
+      setUploadProgress(100);
       setPhaseMessage(`Uploaded ${record.name} (${formatBytes(compressed.compressedSize)})`);
 
-      // Optimistic UI: prepend the new record. The next focus/refresh will
-      // reconcile any divergence.
-      setItems((prev) => [record, ...prev.filter((p) => p.id !== record.id)]);
+      // Instant React-state update.
+      // The Supabase INSERT already returned the canonical row (id,
+      // file_url, status\u2026) so we can commit it to state without waiting
+      // on any other round trip. setItems is synchronous from React's
+      // perspective; the new row appears in the list the same frame the
+      // upload resolves - no manual refresh required.
+      setItems((prev) => {
+        const filtered = prev.filter((p) => p.id !== record.id);
+        return [record, ...filtered];
+      });
 
-      // Force a list refresh from the server so the toast below is based on
-      // the canonical row (id, status, file_url) — not our optimistic copy.
-      void refresh();
+      if (fileRef.current) fileRef.current.value = '';
 
-      // Brief settle, then poll the server once in case anyone else touched
-      // this user's docs concurrently.
+      // Best-effort server reconciliation - does NOT gate the UI. If the
+      // /api/documents list endpoint is down, local state is still the
+      // source of truth and the user already sees their upload.
       setTimeout(() => void refresh(), 800);
       setTimeout(() => {
         setUploadProgress(0);
         setPhaseMessage('');
       }, 3000);
 
-      if (fileRef.current) fileRef.current.value = '';
-      showToast(
-        'success',
-        usedFallback
-          ? `Saved via direct upload (server route unreachable). ${record.name}.`
-          : `${record.name} uploaded — pending review.`
-      );
+      showToast('success', `${record.name} uploaded - pending review.`);
     } catch (err: any) {
       console.error('document upload failed', err);
-      const message =
-        (err?.message && !/<!DOCTYPE|<\/?html|<pre/i.test(err.message))
-          ? err.message
-          : 'Upload failed. Please try again or pick a different file.';
+      const raw = err?.message || 'Upload failed. Please try again.';
+      // Never bubble raw markup back into the toast - defence in depth.
+      const message = /<!DOCTYPE|<\/?html|<pre/i.test(raw)
+        ? 'Upload failed. Please try again or pick a different file.'
+        : raw;
       setPhaseMessage(message);
       showToast('error', message);
     } finally {
@@ -195,8 +190,6 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
     setDeletingId(null);
     if (ok) {
       setItems((prev) => prev.filter((p) => p.id !== id));
-      // Reconcile with the server so the row we just removed doesn't come
-      // back via the next focus/refresh.
       void refresh();
       showToast('success', `${found.name} deleted.`);
     } else {
@@ -207,7 +200,7 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
   async function handleDownload(id: string) {
     const found = items.find((x) => x.id === id);
     const ok = await downloadCustomerDocument(id, found?.name || 'document');
-    if (!ok) alert('Download failed.');
+    if (!ok) showToast('error', 'Download failed.');
   }
 
   const groupedByType = useMemo(() => {
@@ -241,7 +234,8 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
           <span className="truncate">{toast.message}</span>
         </div>
       )}
-      {/* ── Upload box ──────────────────────────────────────────────────────── */}
+
+      {/* Upload box */}
       <section className="rounded-2xl border border-[#f2d9a8] bg-white p-6 shadow-sm">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h3 className="flex items-center gap-2 text-lg font-bold text-[#2c0d16]">
@@ -275,7 +269,7 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
             className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#7b102d] px-4 py-2 text-sm font-bold text-white hover:bg-[#5a0a1f] disabled:opacity-60"
           >
             {uploading ? <Loader2 className="animate-spin" size={16} /> : <UploadCloud size={16} />}
-            {uploading ? 'Working…' : 'Upload'}
+            {uploading ? 'Working\u2026' : 'Upload'}
           </button>
         </div>
 
@@ -292,7 +286,7 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
         )}
       </section>
 
-      {/* ── Documents list ─────────────────────────────────────────────────── */}
+      {/* Documents list */}
       <section className="rounded-2xl border border-[#f2d9a8] bg-white p-6 shadow-sm">
         <div className="mb-4 flex items-center justify-between">
           <h3 className="flex items-center gap-2 text-lg font-bold text-[#2c0d16]">
@@ -325,9 +319,9 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
                     </div>
                     <div className="mt-1 text-xs text-[#6a4a57]">
                       Uploaded {formatDate(it.uploadedAt)}
-                      {it.size ? ` • ${formatBytes(it.size)} on disk` : ''}
+                      {it.size ? ` \u2022 ${formatBytes(it.size)} on disk` : ''}
                       {status === 'Rejected' && it.rejectionReason
-                        ? ` • Rejected: ${it.rejectionReason}`
+                        ? ` \u2022 Rejected: ${it.rejectionReason}`
                         : ''}
                     </div>
                     <div className="mt-1">
@@ -363,7 +357,7 @@ export default function DocumentsCenter({ initial }: { initial?: CustomerDocumen
         )}
       </section>
 
-      {/* ── Per-type quick stats ───────────────────────────────────────────── */}
+      {/* Per-type quick stats */}
       {Object.keys(groupedByType).length > 0 && (
         <section className="rounded-2xl border border-[#f2d9a8] bg-[#fffaf3] p-5 shadow-sm">
           <div className="mb-3 flex items-center gap-2 text-sm font-bold text-[#2c0d16]">

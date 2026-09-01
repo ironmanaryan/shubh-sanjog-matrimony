@@ -162,146 +162,76 @@ export async function uploadDocumentDirect(
 }
 
 /**
- * Compresses a picked file to the brief's 4-20 KB band and uploads it.
+ * Compresses a picked file to the brief's 4-20 KB band and uploads it
+ * DIRECTLY to Supabase Storage + INSERTs the documents row.
  *
- * STRATEGY (revised 2026-09-01 after the production "Request aborted" toast):
+ * STRATEGY (revised 2026-09-01, third pass):
  *
- *   The Express route is no longer the primary path because Vercel's 10 s
- *   serverless-function ceiling combined with the Cloudinary CDN replication
- *   step previously killed the browser fetch mid-upload. We still go to
- *   Supabase Storage directly — the file is already compressed in the
- *   browser so the network round-trip is sub-second.
+ *   The customer-facing upload flow no longer touches `/api/documents/upload`
+ *   at all. The previous Express route was at risk of Vercel's 10 s
+ *   serverless-function ceiling whenever Cloudinary was slow (Vercel killed
+ *   the connection → `Request aborted` toast), and even after we made the
+ *   CDN replication fire-and-forget there was still a working network
+ *   round-trip through the bridge. Skipping it entirely:
  *
- *   1. Try DIRECT upload to Supabase Storage + insert documents row.
- *      The Supabase JS client signs the upload with the user's anon JWT,
- *      the bucket is public so getPublicUrl() returns a working URL, and
- *      the RLS policy `auth.uid() = folder[0]` admits only the owner.
- *   2. If direct fails (no Supabase session, RLS misconfiguration, network
- *      error), fall back to the Express route.
- *   3. Best-effort audit log via `POST /api/customer/activity-log` so the
- *      admin live-activity feed still sees the upload.
+ *   1. `compressDocument` in the browser (the file is already a few KB).
+ *   2. `supabase.storage.from('documents').upload(...)` directly to
+ *      Supabase Storage at `<authUid>/<timestamp>.<ext>`. The bucket is
+ *      public and the INSERT/UPDATE/DELETE RLS policies enforce
+ *      owner-scoped access on storage.objects.
+ *   3. `supabase.from('documents').insert(...)` — the four owner-scoped
+ *      RLS policies on `public.documents` (added in the latest
+ *      `storage_documents.sql` migration) admit the INSERT.
+ *   4. Best-effort audit entry via `POST /api/customer/activity-log`
+ *      (separate route, fire-and-forget so it cannot block the upload).
  *
  * Returns the persisted record plus the compression result. The caller can
  * listen to progress via options.onProgress.
+ *
+ * NOTE: the function has NO fallback to `/api/documents/upload`. If the
+ * direct Supabase path fails, we throw — the front-end renders an honest
+ * error toast, instead of silently doubling the network traffic.
  */
 export async function uploadCompressedDocument(
   file: File,
   documentType: DocumentType,
   options: { token?: string | null; onProgress?: (percent: number) => void } = {}
-): Promise<{ record: CustomerDocument; compressed: CompressedDocument; usedFallback: boolean }> {
-  // Compress first so the network payload is small regardless of path.
+): Promise<{ record: CustomerDocument; compressed: CompressedDocument }> {
+  // Compress first so the network payload is small and the round-trip
+  // fits well inside a single Supabase Storage PUT.
   const compressed = await compressDocument(file, { onProgress: options.onProgress });
   options.onProgress?.(50);
 
-  // ── 1) Try DIRECT Supabase path ──────────────────────────────────────────
+  // Direct Supabase path — the only path. Compression is done; the bytes
+  // fit the bucket's 5 MB cap with orders of magnitude to spare.
+  const direct = await uploadDocumentDirect(file, documentType, {
+    onProgress: (pct) => options.onProgress?.(Math.max(50, pct)),
+  });
+  options.onProgress?.(95);
+
+  // Best-effort audit log entry — fire-and-forget so the customer's UI
+  // experience is never blocked on the server. `keepalive: true` lets
+  // the request survive even if the user navigates away immediately
+  // after picking the file.
   try {
-    const direct = await uploadDocumentDirect(file, documentType, {
-      onProgress: (pct) => options.onProgress?.(Math.max(50, pct)),
-    });
-    options.onProgress?.(95);
-
-    // Best-effort audit log entry — fire-and-forget so the customer's UI
-    // experience is never blocked on the server.
-    try {
-      const token = options.token ?? (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
-      if (token) {
-        fetch('/api/customer/activity-log', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({
-            action: 'UPLOAD_DOCUMENT',
-            detail: `direct upload (${formatBytes(compressed.compressedSize)}) ${documentType}: ${file.name}`,
-          }),
-          keepalive: true,
-        }).catch(() => {});
-      }
-    } catch {
-      /* audit log is best-effort */
-    }
-
-    options.onProgress?.(100);
-    return { record: { ...direct.record, source: 'direct' }, compressed, usedFallback: false };
-  } catch (directErr: any) {
-    const directMessage = directErr?.message || 'Direct upload failed.';
-    // Only fall back if there is a chance the server route will succeed
-    // (i.e., the file is in the size envelope and an auth token exists).
     const token = options.token ?? (typeof window !== 'undefined' ? localStorage.getItem('token') : null);
-    if (!token) {
-      // No platform JWT — server route cannot authenticate either.
-      throw new Error(`Direct upload failed and no platform session was found. Please sign in again. (${directMessage})`);
+    if (token) {
+      fetch('/api/customer/activity-log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          action: 'UPLOAD_DOCUMENT',
+          detail: `direct upload (${formatBytes(compressed.compressedSize)}) ${documentType}: ${file.name}`,
+        }),
+        keepalive: true,
+      }).catch(() => {});
     }
-    options.onProgress?.(70);
-    const { record: serverRecord, compressed: serverCompressed } = await uploadViaServer(file, compressed, documentType, token);
-    options.onProgress?.(100);
-
-    return {
-      record: { ...serverRecord, source: 'server' },
-      compressed: serverCompressed,
-      usedFallback: true,
-    };
-  }
-}
-
-/**
- * Server-route upload used only as a fallback when the direct path fails.
- * Wraps the round-trip in structured-JSON reading so the same code never
- * silently bubbles HTML into a toast.
- */
-async function uploadViaServer(
-  file: File,
-  compressed: CompressedDocument,
-  documentType: DocumentType,
-  token: string
-): Promise<{ record: CustomerDocument; compressed: CompressedDocument }> {
-  const fd = new FormData();
-  const uploadBlob =
-    compressed.file instanceof File
-      ? compressed.file
-      : new File([compressed.file], compressed.fileName, { type: compressed.mimeType });
-  fd.append('file', uploadBlob);
-  fd.append('documentType', documentType);
-
-  let res: Response;
-  try {
-    // 25s ceiling — past this the upload is almost certainly stalled on
-    // Vercel's serverless ceiling anyway, and we'd rather see the toast.
-    const ctrl = new AbortController();
-    const timeout = setTimeout(() => ctrl.abort(), 25_000);
-    res = await fetch('/api/documents/upload', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-      body: fd,
-      signal: ctrl.signal,
-    });
-    clearTimeout(timeout);
-  } catch (networkErr: any) {
-    // Network / abort paths get a clearer message than the generic
-    // "Request aborted" the browser ships by default.
-    const aborted = networkErr?.name === 'AbortError' || /abort/i.test(networkErr?.message || '');
-    throw new Error(aborted
-      ? 'Upload timed out. The server is taking too long to respond — please retry with a smaller file.'
-      : `Network error talking to the server: ${networkErr?.message || 'unknown'}`);
+  } catch {
+    /* audit log is best-effort */
   }
 
-  const parsed = await readJsonError(res, 'Server rejected the upload.');
-  if (!parsed.ok) {
-    throw new Error(parsed.error);
-  }
-  const f = parsed.json.file || parsed.json;
-  return {
-    record: {
-      id: f.id,
-      name: f.originalName || compressed.fileName,
-      uploadedAt: f.uploadedAt || Date.now(),
-      status: f.status || 'Pending Review',
-      documentType: f.documentType || documentType,
-      rejectionReason: f.rejectionReason || null,
-      size: f.size || compressed.compressedSize,
-      mimetype: f.mimetype || compressed.mimeType,
-      source: 'server',
-    },
-    compressed,
-  };
+  options.onProgress?.(100);
+  return { record: { ...direct.record, source: 'direct' }, compressed };
 }
 
 function authHeaders(): Record<string, string> {
