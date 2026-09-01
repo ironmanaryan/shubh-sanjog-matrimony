@@ -139,18 +139,27 @@ function FillDetailsInner() {
       // list them explicitly to avoid shipping the full row (which includes
       // JSONB sections, attachment IDs and audit columns) over the wire on
       // every page load.
+      // Only select columns that exist in supabase/profiles_migration.sql
+      // Previously this list contained `mobile` (should be `phone`/`phone_number`)
+      // and `about_myself` (typo, should be `about_me`) which caused PostgREST
+      // 400 errors, and `cloudinary_url`/`status` which do not exist in `profiles`
+      // (they belong to `documents`/`matrimonial_profiles`). We now select only
+      // valid columns and fallback gracefully if avatar fields are null.
       const PROFILE_PREFILL_COLUMNS = [
         'id', 'user_id',
         'full_name', 'gender', 'dob', 'age', 'height', 'weight',
         'religion', 'caste', 'sub_caste', 'mother_tongue', 'marital_status',
         'city', 'country', 'citizenship', 'nri_status', 'manglik_status',
-        'horoscope_details', 'phone', 'phone_number', 'mobile',
+        'horoscope_details', 'phone', 'phone_number',
         'highest_qualification', 'education_details', 'profession',
         'job_business', 'company', 'annual_income', 'work_location',
         'experience', 'food_preference', 'smoking', 'drinking',
-        'hobbies', 'interests', 'about', 'about_myself', 'bio', 'personality',
+        'hobbies', 'interests', 'about', 'about_me', 'bio', 'personality',
         'father_name', 'father_occupation', 'mother_name', 'mother_occupation',
-        'brothers', 'sisters',
+        'brothers', 'sisters', 'number_of_brothers', 'number_of_sisters',
+        'family_type', 'family_status', 'family_location',
+        'photo_url', 'avatar_url', 'profile_photo',
+        'personal', 'education', 'family',
       ].join(',');
       try {
         const { data } = await supabase

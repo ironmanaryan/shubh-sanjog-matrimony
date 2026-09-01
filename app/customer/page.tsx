@@ -15,31 +15,36 @@ import { getSupabase } from '@/lib/supabase';
 
 // Narrow `select()` on the three profile lookups below — `profiles` carries
 // JSONB sections and attachment columns that we never read here. The list
-// mirrors what the dashboard actually renders.
+// mirrors what the dashboard actually renders and only includes columns that
+// exist in supabase/profiles_migration.sql. Previously this list contained
+// typos like `udinary_url`/`ary_url` and camelCase duplicates (e.g. `fullName`,
+// `subCaste`, `cloudinary_url` which lives in `documents`/`payments`, not
+// `profiles`) causing 400 Bad Request from PostgREST. We now select only
+// valid snake_case columns and fallback gracefully for avatar fields.
 const PROFILE_DISPLAY_COLUMNS = [
-  'status',
-  'full_name', 'fullName', 'gender', 'dob', 'date_of_birth', 'age',
+  'full_name', 'gender', 'dob', 'date_of_birth', 'age',
   'height', 'weight',
-  'religion', 'caste', 'sub_caste', 'subCaste',
-  'mother_tongue', 'motherTongue', 'marital_status', 'maritalStatus',
+  'religion', 'caste', 'sub_caste',
+  'mother_tongue', 'marital_status',
   'location', 'city', 'country', 'citizenship',
-  'nri_status', 'nriStatus', 'manglik_status', 'manglikStatus',
-  'horoscope_details', 'horoscopeDetails',
-  'phone', 'phone_number', 'mobile',
-  'highest_qualification', 'qualification', 'highestQualification',
-  'education_details', 'educationDetails',
+  'nri_status', 'manglik_status',
+  'horoscope_details',
+  'phone', 'phone_number',
+  'highest_qualification', 'qualification',
+  'education_details',
   'profession',
-  'job_business', 'jobBusiness', 'company', 'organization',
-  'annual_income', 'annualIncome', 'work_location', 'workLocation',
+  'job_business', 'company', 'organization',
+  'annual_income', 'work_location',
   'experience', 'years_of_experience',
-  'food_preference', 'foodPreference', 'smoking', 'drinking',
+  'food_preference', 'smoking', 'drinking',
   'hobbies', 'interests',
   'about', 'about_me', 'bio', 'personality',
-  'father_name', 'fatherName', 'father_occupation',
-  'mother_name', 'motherName', 'mother_occupation',
-  'brothers', 'sisters',
-  'photo_url', 'avatar_url', 'profile_photo', 'cloudinary_url', 'personal',
-  'email',
+  'father_name', 'father_occupation',
+  'mother_name', 'mother_occupation',
+  'brothers', 'sisters', 'number_of_brothers', 'number_of_sisters',
+  'family_type', 'family_status', 'family_location',
+  'photo_url', 'avatar_url', 'profile_photo', 'personal',
+  'email', 'is_completed',
 ].join(',');
 
 const navItems = [
