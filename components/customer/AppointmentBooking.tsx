@@ -201,11 +201,15 @@ export default function AppointmentBooking() {
         // ── SANITIZED PAYLOAD ──────────────────────────────────────
         // Type-coerce all values to prevent PostgREST 400 Bad Request errors
         // from schema type constraints or null mismatches.
+        // Note: the 'appointments' table has a NOT-NULL 'date' column, so we
+        // always include it alongside booking_date and appointment_date.
+        const formattedDate = selectedDate ? String(selectedDate) : new Date().toISOString().split('T')[0];
         const payload = {
           id: appointmentId,
           user_id: userId ? String(userId) : null,
-          booking_date: selectedDate ? String(selectedDate) : new Date().toISOString().split('T')[0],
-          appointment_date: selectedDate ? String(selectedDate) : new Date().toISOString().split('T')[0],
+          date: formattedDate, // Fixes NOT-NULL constraint on 'date' column
+          booking_date: formattedDate,
+          appointment_date: formattedDate,
           time_slot: selectedSlot || "10:00 AM",
           session_type: bookingType || "Consultation",
           notes: notes || "",
