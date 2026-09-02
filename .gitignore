@@ -21,3 +21,8 @@ server/uploads/*
 tsconfig.tsbuildinfo
 .vercel
 .workbuddy-ai/
+
+# Local-only scratch notes + AI tool config (opencode.jsonc holds an embedded key — never commit)
+FIX_APPLIED.md
+SOLUTION_SUMMARY.md
+opencode.jsonc
