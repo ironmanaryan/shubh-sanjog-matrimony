@@ -203,14 +203,20 @@ export default function AppointmentBooking() {
         // from schema type constraints or null mismatches.
         // Note: the 'appointments' table has a NOT-NULL 'date' column, so we
         // always include it alongside booking_date and appointment_date.
+        // Note: the 'appointments' table also has a NOT-NULL 'time' column, so
+        // we always include it alongside time_slot.
+        // Safely retrieve the authenticated user ID; fallback to null if missing
+        // (FK constraint "appointments_user_id_fkey" requires a valid referenced ID).
         const formattedDate = selectedDate ? String(selectedDate) : new Date().toISOString().split('T')[0];
+        const formattedTime = selectedSlot ? String(selectedSlot) : "10:00 AM";
         const payload = {
           id: appointmentId,
-          user_id: userId ? String(userId) : null,
+          user_id: user?.id || null, // Ensure valid string ID or null (FK constraint)
           date: formattedDate, // Fixes NOT-NULL constraint on 'date' column
           booking_date: formattedDate,
           appointment_date: formattedDate,
-          time_slot: selectedSlot || "10:00 AM",
+          time: formattedTime, // Fixes NOT-NULL constraint on 'time' column
+          time_slot: formattedTime, // Fallback key
           session_type: bookingType || "Consultation",
           notes: notes || "",
           status: "Booked",
