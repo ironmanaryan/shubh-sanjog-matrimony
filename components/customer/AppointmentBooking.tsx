@@ -202,6 +202,7 @@ export default function AppointmentBooking() {
           id: appointmentId,
           user_id: userId,
           booking_date: selectedDate,
+          appointment_date: selectedDate, // Fallback key — Supabase schema cache may expect 'appointment_date'
           time_slot: slotTime,
           session_type: bookingType,
           notes: notes || '',
