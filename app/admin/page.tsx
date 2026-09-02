@@ -694,7 +694,6 @@ export default function AdminPage() {
           // Express API is briefly unreachable. Ordered by created_at desc
           // so the newest bookings appear at the top.
           const supabase = getSupabase();
-          let directCount = 0;
           if (supabase) {
             try {
               const { data: rows, error } = await supabase
@@ -742,23 +741,9 @@ export default function AdminPage() {
                   };
                 });
                 setAllAppointments(adapted);
-                directCount = adapted.length;
               }
             } catch (directErr) {
               console.warn('admin appointments direct SELECT failed:', directErr);
-            }
-          }
-
-          // SECONDARY fallback: if Supabase returned nothing (network down
-          // or admin not authed in browser), try the server route.
-          if (directCount === 0) {
-            try {
-              const res = await fetch(`${API}/admin/appointments`, { headers: authHeaders() });
-              const json = await res.json();
-              if (res.ok) setAllAppointments(json.appointments || []);
-            } catch (serverErr) {
-              console.warn('admin appointments server fallback failed:', serverErr);
-              setAllAppointments([]);
             }
           }
         }

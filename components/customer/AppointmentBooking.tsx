@@ -201,9 +201,9 @@ export default function AppointmentBooking() {
         const insertPayload = {
           id: appointmentId,
           user_id: userId,
-          date: selectedDate,
-          time: slotTime,
-          type: bookingType,
+          booking_date: selectedDate,
+          time_slot: slotTime,
+          session_type: bookingType,
           notes: notes || '',
           status: 'Booked',
           feedback: null,
@@ -213,51 +213,40 @@ export default function AppointmentBooking() {
 
         const { error } = await supabase
           .from('appointments')
-          .insert(insertPayload)
+          .insert([insertPayload])
           .select();
 
         if (error) {
           console.error('Appointment Insert Error:', error);
-          // If the error is an RLS / FK issue, fall back to the Express API
-          // which handles profile upsert + membership gating server-side.
-          if (error.code === '23503' || error.code === '42501' || /foreign key|policy/i.test(error.message)) {
-            console.warn('Supabase insert blocked, falling back to Express API:', error.message);
-          } else {
-            setMessage(`Booking failed: ${error.message}`);
-            setSaving(false);
-            return;
-          }
-        } else {
-          // Success — refetch canonical rows from Supabase
-          setMessage('Appointment booked successfully.');
-          setNotes('');
-          await fetchMyAppointments();
+          setMessage(`Booking failed: ${error.message}`);
           setSaving(false);
           return;
         }
+
+        // Immediately append the new appointment to local state so it displays
+        // under "My appointments" without waiting for refetch
+        // Note: insertPayload already contains 'id', so we spread it directly
+        // and override specific fields rather than duplicating 'id'
+        setBookings((prev) => [{ ...insertPayload, date: insertPayload.booking_date, time: insertPayload.time_slot, type: insertPayload.session_type, notes: insertPayload.notes, status: 'Booked' }, ...prev]);
+
+        // Refetch canonical rows from Supabase to sync
+        await fetchMyAppointments();
+        setMessage('Appointment booked successfully.');
+        setNotes('');
+        setSaving(false);
+        return;
       } catch (directErr: any) {
-        console.error('Supabase direct booking failed, falling back to Express API:', directErr);
+        console.error('Supabase direct booking failed:', directErr);
+        setMessage('Booking failed. Please try again.');
+        setSaving(false);
+        return;
       }
     }
 
-    // ── FALLBACK: Express API (handles membership gate + profile guard) ──
-    try {
-      const res = await fetch(`${API}/appointments/book`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ date: selectedDate, time: slotTime, type: bookingType, notes }),
-      });
-
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Booking failed');
-      setMessage('Appointment booked successfully.');
-      setNotes('');
-      await fetchMyAppointments();
-    } catch (err: any) {
-      setMessage(err.message || 'Booking failed');
-    } finally {
-      setSaving(false);
-    }
+    // If Supabase is not available, show an error (do not fall back to in-memory Express API
+    // which would not persist to Supabase and cause the admin panel to stay empty)
+    setMessage('Unable to reach booking service. Please ensure you are connected.');
+    setSaving(false);
   };
 
   // Customer-side self-service: cancel an existing booking. Completion +
