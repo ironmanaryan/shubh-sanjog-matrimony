@@ -770,12 +770,17 @@ async function listAppointments(_ignored, userId) {
     createdAt: r.created_at,
   }));
 }
-async function setAppointmentStatusDb(_ignored, id, status, { feedback = undefined } = {}) {
+async function setAppointmentStatusDb(_ignored, id, status, { feedback = undefined, reschedule = undefined } = {}) {
   const client = getClient();
   if (!client) return;
   const set = { status };
   if (status === 'Completed') set.completed_at = Date.now();
   if (feedback !== undefined) set.feedback = feedback;
+  // Reschedule support — date/time may move without a status change
+  if (reschedule && typeof reschedule === 'object') {
+    if (reschedule.date) set.date = String(reschedule.date);
+    if (reschedule.time) set.time = String(reschedule.time);
+  }
   await client.from(TABLES.appointments).update(set).eq('id', id);
 }
 
@@ -823,7 +828,20 @@ async function getNotificationsDb(_ignored, userId) {
   const client = getClient();
   if (!client) return [];
   const { data } = await client.from(TABLES.notifications).select('*').eq('to_user_id', userId).order('at', { ascending: false });
-  return (data || []).map((n) => ({ id: n.id, toUserId: n.to_user_id, fromUserId: n.from_user_id, type: n.type, payload: n.payload || '', at: n.at }));
+  return (data || []).map((n) => ({ id: n.id, toUserId: n.to_user_id, fromUserId: n.from_user_id, type: n.type, payload: n.payload || '', at: n.at, readAt: n.read_at || null }));
+}
+
+// Mark one notification (id) or all (id === null) as read for a user.
+// Returns the number of rows flipped — 0 is fine (already read / not owned).
+async function markNotificationsReadDb(_ignored, userId, id = null) {
+  const client = getClient();
+  if (!client) return 0;
+  const now = Date.now();
+  let query = client.from(TABLES.notifications).update({ read_at: now }).eq('to_user_id', userId).is('read_at', null);
+  if (id) query = query.eq('id', id);
+  const { data, error } = await query.select('id');
+  if (error) throw error;
+  return (data || []).length;
 }
 
 // --- internal notes ---
@@ -1102,6 +1120,7 @@ module.exports = {
   addInterestDb,
   saveNotificationDb,
   getNotificationsDb,
+  markNotificationsReadDb,
   saveInternalNoteDb,
   listInternalNotesDb,
   saveInquiryDb,

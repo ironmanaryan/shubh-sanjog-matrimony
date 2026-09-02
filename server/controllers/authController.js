@@ -59,6 +59,13 @@ async function resolveUserFromSupabaseIdentity(authUser) {
   const metadata = authUser.user_metadata || {};
   const fullName = metadata.full_name || metadata.name || '';
 
+  // 🔔 Detect brand-new registration BEFORE createUserIfMissing adds the row,
+  // otherwise the existence check would always return true.
+  const { isExistingUser } = require('../data/store');
+  const wasNewUser =
+    !isExistingUser(authUser.email) && !isExistingUser(authUser.id) &&
+    !isExistingUser(String(authUser.email || '').toLowerCase());
+
   const user = createUserIfMissing(authUser.id, {
     email: normalizeEmail(authUser.email),
     fullName: typeof fullName === 'string' && fullName.trim() ? fullName.trim() : undefined,
@@ -80,6 +87,20 @@ async function resolveUserFromSupabaseIdentity(authUser) {
     ip: '',
     detail: `signed in via Supabase — ${user.email || user.identifier || user.id}`,
   }).catch(() => {});
+
+  // 🔔 Realtime notification — welcome new users on their very first sign-in.
+  if (wasNewUser && user.role === 'customer') {
+    try {
+      const { notifyUser } = require('../utils/notify');
+      notifyUser({
+        toUserId: user.id,
+        type: 'registration',
+        payload: { email: user.email || null, fullName: user.fullName || null },
+      }).catch(() => {});
+    } catch (e) {
+      /* notification must never break sign-in */
+    }
+  }
 
   return user;
 }

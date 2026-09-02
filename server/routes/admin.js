@@ -392,6 +392,14 @@ router.post('/documents/approve', verifyTokenMiddleware, requirePermission('revi
   try {
     await db.setDocumentStatus(db._db, id, 'Approved', null);
   } catch (e) { console.warn('db set status failed', e); }
+
+  // 🔔 Realtime notification to the document owner
+  try {
+    const { notifyUser } = require('../utils/notify');
+    const ownerId = meta?.userId || (await findDocumentOwner(id));
+    await notifyUser({ toUserId: ownerId, type: 'document_approved', payload: { documentId: id, documentType: meta?.documentType || 'document' } });
+  } catch (e) { console.warn('document approve notify failed', e && e.message ? e.message : e); }
+
   return res.json({ ok: true, id, status: 'Approved' });
 });
 
@@ -405,8 +413,32 @@ router.post('/documents/reject', verifyTokenMiddleware, requirePermission('revie
   try {
     await db.setDocumentStatus(db._db, id, 'Rejected', reason || 'No reason provided');
   } catch (e) { console.warn('db set status failed', e); }
+
+  // 🔔 Realtime notification to the document owner
+  try {
+    const { notifyUser } = require('../utils/notify');
+    const ownerId = meta?.userId || (await findDocumentOwner(id));
+    await notifyUser({
+      toUserId: ownerId,
+      type: 'document_rejected',
+      payload: { documentId: id, documentType: meta?.documentType || 'document', reason: reason || 'No reason provided' },
+    });
+  } catch (e) { console.warn('document reject notify failed', e && e.message ? e.message : e); }
+
   return res.json({ ok: true, id, status: 'Rejected', reason: reason || 'No reason provided' });
 });
+
+// Resolve a document owner when the hydrated store does not have the row
+// (e.g. after a server restart). Reads directly through the service client.
+async function findDocumentOwner(documentId) {
+  try {
+    const rows = await db.listDocuments(db._db);
+    const doc = (rows || []).find((d) => d.id === documentId);
+    return doc?.userId || null;
+  } catch (e) {
+    return null;
+  }
+}
 
 // --- Payment Approvals (UPI verification queue) -----------------------------
 
@@ -473,10 +505,31 @@ router.post('/payments/approve', verifyTokenMiddleware, requirePermission('verif
       await db.setPaymentStatus(db._db, id, 'Approved', null);
       await db.saveMembershipDb(db._db, payment.userId, membership, id);
       const { v4: uuidv4 } = require('uuid');
-      const type = payment.plan === 'Consultation' ? 'payment_approved' : 'membership_activated';
-      const notification = { id: uuidv4(), toUserId: payment.userId, fromUserId: req.user.id, type, payload: JSON.stringify({ paymentId: id, plan: payment.plan }), at: Date.now() };
-      await db.saveNotificationDb(db._db, notification);
-      store.notifications.unshift(notification);
+      const { notifyUser } = require('../utils/notify');
+      // 🔔 Realtime — "Membership Payment Successful" (har approved payment pe)
+      await notifyUser({
+        toUserId: payment.userId,
+        fromUserId: req.user.id,
+        type: 'membership_payment_successful',
+        payload: { paymentId: id, plan: payment.plan, amount: payment.amount ?? null },
+      });
+      // 🔔 "Membership Activated" — sirf jab actual membership bani
+      if (payment.plan !== 'Consultation') {
+        await notifyUser({
+          toUserId: payment.userId,
+          fromUserId: req.user.id,
+          type: 'membership_activated',
+          payload: { paymentId: id, plan: payment.plan, tier: membership?.tier || payment.plan },
+        });
+      } else {
+        // Consultation = one-time meeting credit, membership_activated nahi banta
+        await notifyUser({
+          toUserId: payment.userId,
+          fromUserId: req.user.id,
+          type: 'membership_activated',
+          payload: { paymentId: id, plan: payment.plan, consultation: true },
+        });
+      }
     } catch (e) {
       console.warn('db approve payment failed', e);
     }

@@ -241,6 +241,30 @@ export default function AppointmentBooking() {
           return;
         }
 
+        // 🔔 Realtime notification — appointment_confirmed (direct insert path).
+        // The notifications RLS insert policy lets a user write to their own
+        // to_user_id, so the browser can do this without the server.
+        try {
+          await supabase.from('notifications').insert({
+            id: crypto.randomUUID(),
+            to_user_id: user?.id || null,
+            from_user_id: user?.id || null,
+            type: 'appointment_confirmed',
+            payload: JSON.stringify({
+              title: 'Appointment Confirmed ✅',
+              message: `Your ${payload.session_type || 'Consultation'} on ${formattedDate} at ${formattedTime} is confirmed.`,
+              icon: 'appointment',
+              appointmentId: payload.id,
+              date: formattedDate,
+              time: formattedTime,
+            }),
+            at: Date.now(),
+          });
+        } catch (notifyErr) {
+          // Non-fatal: booking succeeded, notification is best-effort
+          console.warn('appointment_confirmed notification failed:', notifyErr);
+        }
+
         // Immediately append the new appointment to local state so it displays
         // under "My appointments" without waiting for refetch
         // Note: payload already contains 'id', so we spread it directly

@@ -250,9 +250,13 @@ async function init() {
       fromUserId TEXT,
       type TEXT,
       payload TEXT,
-      at INTEGER
+      at INTEGER,
+      readAt INTEGER
     );
   `);
+  // Migration for pre-existing dev databases: add the readAt column if the
+  // table was created before realtime notifications shipped.
+  await db.run(`ALTER TABLE notifications ADD COLUMN readAt INTEGER`).catch(() => {});
 
   // Single source of truth for pricing tiers (scope PDF §9). Seeded from the
   // catalog in data/store.js; runtime reads MUST go through this table.
@@ -795,6 +799,17 @@ async function getNotificationsDb(db, userId) {
   return db.all(`SELECT * FROM notifications WHERE toUserId = ? ORDER BY at DESC`, [userId]);
 }
 
+// Mark one notification (id) or all (id === null) as read for a user.
+async function markNotificationsReadDb(db, userId, id = null) {
+  const now = Date.now();
+  if (id) {
+    await db.run(`UPDATE notifications SET readAt = ? WHERE toUserId = ? AND id = ? AND readAt IS NULL`, [now, userId, id]);
+  } else {
+    await db.run(`UPDATE notifications SET readAt = ? WHERE toUserId = ? AND readAt IS NULL`, [now, userId]);
+  }
+  return 0; // SQLite dev fallback — count is not critical here
+}
+
 // --- Admin internal notes (scope PDF §31) ------------------------------------
 async function saveInternalNoteDb(db, note) {
   await db.run(
@@ -1041,4 +1056,4 @@ async function saveNotificationDb(db, notification) {
   );
 }
 
-module.exports = { init, hydrateStore, createUser, getUserByIdentifier, getUserById, backfillUserEmail, upsertProfile, getProfile, mapProfileRow, listMembershipPlansDb, getPlanDb, setProfileReview, submitProfileForReviewDb, listProfilesByStatusDb, saveMatchAssignmentDb, listMatchAssignmentsDb, savePrivacyDb, upsertPrivacyOnly, savePayment, setPaymentStatus, getPaymentById, listPayments, listPaymentsByUserDb, saveInterestRequest, updateInterestRequestDb, saveMembershipDb, saveDocument, listDocuments, saveAppointment, listAppointments, setDocumentStatus, deleteDocument, toggleShortlistDb, getShortlistDb, addInterestDb, getNotificationsDb, saveNotificationDb, saveInternalNoteDb, listInternalNotesDb, saveInquiryDb, listInquiriesDb, getInquiryByIdDb, setInquiryStatusDb, mapInquiryRow, saveAuditLogDb, listAuditLogsDb, setTokenRevocationDb, anonymizeAndPurgeUser, deleteUserCascade, setUserRole, listUsers, setAppointmentStatusDb, saveOtp, latestActiveOtp, countRecentOtps, incrementOtpAttempts, consumeOtp };
+module.exports = { init, hydrateStore, createUser, getUserByIdentifier, getUserById, backfillUserEmail, upsertProfile, getProfile, mapProfileRow, listMembershipPlansDb, getPlanDb, setProfileReview, submitProfileForReviewDb, listProfilesByStatusDb, saveMatchAssignmentDb, listMatchAssignmentsDb, savePrivacyDb, upsertPrivacyOnly, savePayment, setPaymentStatus, getPaymentById, listPayments, listPaymentsByUserDb, saveInterestRequest, updateInterestRequestDb, saveMembershipDb, saveDocument, listDocuments, saveAppointment, listAppointments, setDocumentStatus, deleteDocument, toggleShortlistDb, getShortlistDb, addInterestDb, getNotificationsDb, markNotificationsReadDb, saveNotificationDb, saveInternalNoteDb, listInternalNotesDb, saveInquiryDb, listInquiriesDb, getInquiryByIdDb, setInquiryStatusDb, mapInquiryRow, saveAuditLogDb, listAuditLogsDb, setTokenRevocationDb, anonymizeAndPurgeUser, deleteUserCascade, setUserRole, listUsers, setAppointmentStatusDb, saveOtp, latestActiveOtp, countRecentOtps, incrementOtpAttempts, consumeOtp };

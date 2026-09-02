@@ -9,6 +9,7 @@ import PrivacySettings from '../../components/customer/PrivacySettings';
 import RequestMeetingButton from '@/components/customer/RequestMeetingButton';
 import DocumentBadges from '@/components/customer/DocumentBadges';
 import MembershipExpiryBanner from '@/components/customer/MembershipExpiryBanner';
+import NotificationsPanel from '@/components/customer/NotificationsPanel';
 import { compatibilityBadgeClass } from '@/lib/compatibility';
 import { buildMeetingRequestMessage } from '@/lib/whatsapp';
 import { API, requestJson } from '@/lib/api-client';
@@ -128,7 +129,7 @@ type DocumentItem = { id: string; status?: string; documentType?: string | null;
 // customer dashboard type graph.
 type DocumentLike = { documentType?: string | null | undefined; status?: string | null | undefined };
 
-type NotificationItem = { id: string; type: string; at: number; payload?: string };
+type NotificationItem = { id: string; type: string; at: number; payload?: string | Record<string, unknown> | null };
 
 // Compatibility highlight card (PRD high-priority #1) — mirrors the
 // /matches/search result shape; matchScore is computed server-side against
@@ -392,6 +393,9 @@ export default function CustomerDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [supabaseProfile, setSupabaseProfile] = useState<Record<string, unknown> | null>(null);
   const [supabaseUser, setSupabaseUser] = useState<{ id: string; email?: string } | null>(null);
+  // Platform user id (users.id) — stored by the session bridge. Realtime
+  // notifications are keyed on this, NOT the Supabase auth uid.
+  const [platformUserId, setPlatformUserId] = useState<string | null>(null);
   const [photoUploading, setPhotoUploading] = useState(false);
   const [photoProgress, setPhotoProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -674,6 +678,14 @@ export default function CustomerDashboardPage() {
 
   useEffect(() => {
     loadData();
+    // 🔔 Realtime notifications are keyed on the PLATFORM user id (users.id),
+    // which the session bridge stores in localStorage — not the Supabase uid.
+    try {
+      const cachedUser = JSON.parse(localStorage.getItem('shubhSanjogUser') || 'null');
+      if (cachedUser?.id) setPlatformUserId(String(cachedUser.id));
+    } catch {
+      /* corrupted cache — realtime still works, RLS does the real scoping */
+    }
     // Fetch Supabase-authenticated user & profile (for OAuth + new `profiles` table)
     (async () => {
       try {
@@ -1368,22 +1380,11 @@ export default function CustomerDashboardPage() {
                 </div>
               </div>
 
-              {/* Notifications feed — real data instead of mock activity */}
-              <div id="notifications" className="rounded-[28px] border border-[#f2d9a8] bg-white p-5 shadow-soft">
-                <h2 className="text-xl font-black text-[#2c0d16]">Notifications</h2>
-                <ul className="mt-5 space-y-3 text-sm text-[#5a3743]">
-                  {notifications.length === 0 ? (
-                    <li className="rounded-2xl bg-[#fffaf3] p-3">No notifications yet.</li>
-                  ) : notifications.slice(0, 6).map((item) => (
-                    <li key={item.id} className="flex items-start gap-3 rounded-2xl bg-[#fffaf3] p-3">
-                      <span className="mt-1 inline-flex h-2.5 w-2.5 rounded-full bg-[#d4a64a]" />
-                      <span>
-                        <span className="font-semibold capitalize text-[#2c0d16]">{item.type.replace(/_/g, ' ')}</span> — {new Date(item.at).toLocaleDateString()}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+              {/* 🔔 Realtime Notifications — Supabase Realtime + 30s polling
+                  backup. Live badge, mark-all-read, per-event icons. The
+                  platform user id scopes the channel client-side; server-side
+                  RLS does the real filtering. */}
+              <NotificationsPanel userId={platformUserId} initialNotifications={notifications} />
             </section>
 
             {/* Privacy toggles — hide photo / phone until interest accepted */}

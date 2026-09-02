@@ -145,10 +145,10 @@ async function bookAppointment(req, res) {
 // Shared mutation kernel — keeps customer and admin code paths in lockstep.
 // Both call into the same `setAppointmentStatusDb(...)` so the audit log
 // captures every transition through one funnel.
-async function transitionAppointment({ id, status, feedback, actor, req, allowOwnerCancel = false }) {
+async function transitionAppointment({ id, status, feedback, actor, req, allowOwnerCancel = false, reschedule = undefined }) {
   const booking = store.appointments.get(id);
   if (!booking) return { ok: false, statusCode: 404, error: 'Appointment not found' };
-  if (!ALLOWED_STATUSES.includes(status)) {
+  if (status && !ALLOWED_STATUSES.includes(status)) {
     return { ok: false, statusCode: 400, error: `status must be one of: ${ALLOWED_STATUSES.join(', ')}` };
   }
   // Customers can only cancel their own booking; completion/feedback is
@@ -156,24 +156,46 @@ async function transitionAppointment({ id, status, feedback, actor, req, allowOw
   if (!actor.isAdmin && !(allowOwnerCancel && status === 'Cancelled' && booking.userId === actor.id)) {
     return { ok: false, statusCode: 403, error: 'Only staff can complete meetings or change them outside of cancellation' };
   }
-  if (booking.status === status) return { ok: true, booking, statusCode: 200 };
+  if (status && booking.status === status) return { ok: true, booking, statusCode: 200 };
 
-  booking.status = status;
-  if (feedback !== undefined && feedback !== null) booking.feedback = feedback;
-  if (status === 'Completed') booking.completedAt = Date.now();
+  const previousDate = booking.date;
+  const previousTime = booking.time;
+
+  if (status) {
+    booking.status = status;
+    if (feedback !== undefined && feedback !== null) booking.feedback = feedback;
+    if (status === 'Completed') booking.completedAt = Date.now();
+  }
+
+  // Reschedule: date/time move (admin-driven, customer cannot self-reschedule)
+  const isReschedule = Boolean(reschedule && (reschedule.date || reschedule.time));
+  if (isReschedule) {
+    if (reschedule.date) booking.date = String(reschedule.date);
+    if (reschedule.time) booking.time = String(reschedule.time);
+  }
   store.appointments.set(id, booking);
 
   try {
     if (db.isReady()) {
       const opts = {};
       if (feedback !== undefined && feedback !== null) opts.feedback = feedback;
-      await db.setAppointmentStatusDb(db._db, id, status, opts);
+      if (reschedule && (reschedule.date || reschedule.time)) opts.reschedule = { date: booking.date, time: booking.time };
+      await db.setAppointmentStatusDb(db._db, id, status || booking.status, opts);
+
+      const notificationType = isReschedule
+        ? 'appointment_rescheduled'
+        : status === 'Completed' ? 'appointment_completed' : status === 'Cancelled' ? 'appointment_cancelled' : 'appointment_updated';
       const notification = {
         id: uuidv4(),
         toUserId: booking.userId,
         fromUserId: actor.id,
-        type: status === 'Completed' ? 'appointment_completed' : status === 'Cancelled' ? 'appointment_cancelled' : 'appointment_updated',
-        payload: JSON.stringify({ appointmentId: id, feedback: feedback || null, status }),
+        type: notificationType,
+        payload: JSON.stringify({
+          appointmentId: id,
+          feedback: feedback || null,
+          status: status || booking.status,
+          ...(isReschedule ? { previousDate, previousTime, date: booking.date, time: booking.time } : {}),
+        }),
         at: Date.now(),
       };
       await db.saveNotificationDb(db._db, notification);
@@ -189,7 +211,7 @@ async function transitionAppointment({ id, status, feedback, actor, req, allowOw
       action: 'UPDATE_STATUS',
       targetUserId: booking.userId,
       ip: (req && req.headers && req.headers['x-forwarded-for']) || (req && req.ip) || '',
-      detail: `${actor.identifier || actor.id} set appointment ${id} (${booking.date} ${booking.time}) -> ${status}${feedback ? ` with feedback "${String(feedback).slice(0, 240)}"` : ''}`,
+      detail: `${actor.identifier || actor.id} ${isReschedule ? 'rescheduled' : 'set'} appointment ${id} (${booking.date} ${booking.time}) -> ${status || booking.status}${feedback ? ` with feedback "${String(feedback).slice(0, 240)}"` : ''}`,
     });
   } catch (e) { /* audit log is non-fatal */ }
 
@@ -223,18 +245,25 @@ async function updateOwnAppointmentStatus(req, res) {
 }
 
 // POST /api/admin/appointments/status — staff-driven transition.
-// `action` is one of 'complete' | 'cancel' | 'submit_feedback'. Any of the
-// three may carry a free-text `feedback` note persisted to the row.
+// `action` is one of 'complete' | 'cancel' | 'submit_feedback' | 'reschedule'.
+// 'reschedule' carries `date` + `time` and keeps status as-is.
 async function adminUpdateAppointmentStatus(req, res) {
   try {
-    const { id, action, feedback } = req.body || {};
+    const { id, action, feedback, date, time } = req.body || {};
     if (!id) return res.status(400).json({ ok: false, error: 'id required' });
     let status;
+    let reschedule;
     switch (action) {
       case 'complete': status = 'Completed'; break;
       case 'cancel': status = 'Cancelled'; break;
       case 'submit_feedback': status = 'Completed'; break; // completing + tagging feedback in one shot
-      default: return res.status(400).json({ ok: false, error: 'action must be complete|cancel|submit_feedback' });
+      case 'reschedule':
+        // date/time required; status stays as-is (Booked)
+        if (!date || !time) return res.status(400).json({ ok: false, error: 'date and time required for reschedule' });
+        reschedule = { date: String(date), time: String(time) };
+        status = undefined; // no status change
+        break;
+      default: return res.status(400).json({ ok: false, error: 'action must be complete|cancel|submit_feedback|reschedule' });
     }
 
     const result = await transitionAppointment({

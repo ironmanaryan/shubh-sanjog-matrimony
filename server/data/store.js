@@ -137,4 +137,16 @@ function createUserIfMissing(identifier, details = {}) {
   return user;
 }
 
-module.exports = { store, createUserIfMissing, normalizeEmail, ensureMembership, applyUsage, activateMembership, getPlan, isMembershipTier, getPrivacySettings, setPrivacySettings, MEMBERSHIP_PACKAGES, UPI_CONFIG };
+// True when an account with this identifier/email already exists — used to
+// fire the "Registration" welcome notification only for brand-new users.
+function isExistingUser(identifier) {
+  const key = String(identifier || '').trim().toLowerCase();
+  if (!key) return false;
+  return Array.from(store.users.values()).some(
+    (user) =>
+      String(user.identifier).toLowerCase() === key ||
+      (user.email && String(user.email).toLowerCase() === key)
+  );
+}
+
+module.exports = { store, createUserIfMissing, isExistingUser, normalizeEmail, ensureMembership, applyUsage, activateMembership, getPlan, isMembershipTier, getPrivacySettings, setPrivacySettings, MEMBERSHIP_PACKAGES, UPI_CONFIG };
