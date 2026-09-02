@@ -200,11 +200,11 @@ export default function AppointmentBooking() {
         const now = Date.now();
         const insertPayload = {
           id: appointmentId,
-          user_id: userId,
+          user_id: user?.id || null,
           booking_date: selectedDate,
           appointment_date: selectedDate, // Fallback key — Supabase schema cache may expect 'appointment_date'
           time_slot: slotTime,
-          session_type: bookingType,
+          session_type: bookingType || 'Consultation',
           notes: notes || '',
           status: 'Booked',
           feedback: null,
