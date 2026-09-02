@@ -139,6 +139,9 @@ begin
     where a.date = target_date
       and a.status = 'Booked'
       and a.user_id is not null
+      -- guard: skip orphaned appointments whose user row no longer exists,
+      -- otherwise the FK on notifications.to_user_id aborts the whole run
+      and exists (select 1 from public.users u where u.id = a.user_id)
       and not exists (
         select 1 from public.notifications n
         where n.to_user_id = a.user_id
@@ -188,6 +191,8 @@ begin
       and m.expires_at is not null
       and m.expires_at > now_ms
       and m.expires_at <= limit_ms
+      -- guard: skip orphaned memberships whose user row no longer exists
+      and exists (select 1 from public.users u where u.id = m.user_id)
       and not exists (
         select 1 from public.notifications n
         where n.to_user_id = m.user_id
