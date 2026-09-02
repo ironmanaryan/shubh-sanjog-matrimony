@@ -198,24 +198,31 @@ export default function AppointmentBooking() {
             : `apt-${userId}-${Date.now()}`;
 
         const now = Date.now();
-        const insertPayload = {
+        // ── SANITIZED PAYLOAD ──────────────────────────────────────
+        // Type-coerce all values to prevent PostgREST 400 Bad Request errors
+        // from schema type constraints or null mismatches.
+        const payload = {
           id: appointmentId,
-          user_id: user?.id || null,
-          booking_date: selectedDate,
-          appointment_date: selectedDate, // Fallback key — Supabase schema cache may expect 'appointment_date'
-          time_slot: slotTime,
-          session_type: bookingType || 'Consultation',
-          notes: notes || '',
-          status: 'Booked',
-          feedback: null,
-          completed_at: null,
-          created_at: now,
+          user_id: userId ? String(userId) : null,
+          booking_date: selectedDate ? String(selectedDate) : new Date().toISOString().split('T')[0],
+          appointment_date: selectedDate ? String(selectedDate) : new Date().toISOString().split('T')[0],
+          time_slot: selectedSlot || "10:00 AM",
+          session_type: bookingType || "Consultation",
+          notes: notes || "",
+          status: "Booked",
         };
 
         const { error } = await supabase
           .from('appointments')
-          .insert([insertPayload])
+          .insert([payload])
           .select();
+
+        if (error) {
+          console.error("Insert failed:", error);
+          setMessage("Booking failed: " + error.message);
+        } else {
+          alert("Appointment booked successfully!");
+        }
 
         if (error) {
           console.error('Appointment Insert Error:', error);
@@ -226,9 +233,9 @@ export default function AppointmentBooking() {
 
         // Immediately append the new appointment to local state so it displays
         // under "My appointments" without waiting for refetch
-        // Note: insertPayload already contains 'id', so we spread it directly
+        // Note: payload already contains 'id', so we spread it directly
         // and override specific fields rather than duplicating 'id'
-        setBookings((prev) => [{ ...insertPayload, date: insertPayload.booking_date, time: insertPayload.time_slot, type: insertPayload.session_type, notes: insertPayload.notes, status: 'Booked' }, ...prev]);
+        setBookings((prev) => [{ ...payload, date: payload.booking_date, time: payload.time_slot, type: payload.session_type, notes: payload.notes, status: 'Booked' }, ...prev]);
 
         // Refetch canonical rows from Supabase to sync
         await fetchMyAppointments();
