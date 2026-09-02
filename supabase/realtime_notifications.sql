@@ -102,6 +102,24 @@ create policy "notifications_update_own"
     )
   );
 
+-- lets the browser delete its own notifications (page-level delete button)
+drop policy if exists "notifications_delete_own" on public.notifications;
+create policy "notifications_delete_own"
+  on public.notifications
+  for delete
+  to authenticated
+  using (
+    exists (
+      select 1 from public.users u
+      where u.id = notifications.to_user_id
+        and (
+          u.identifier = auth.uid()::text
+          or (u.email is not null and lower(u.email) = lower(coalesce(auth.email(), ''))
+              and coalesce(auth.email(), '') <> '')
+        )
+    )
+  );
+
 create index if not exists idx_notifications_type_to
   on public.notifications (to_user_id, type);
 

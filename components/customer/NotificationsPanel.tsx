@@ -6,12 +6,15 @@
  * • Realtime: Supabase postgres_changes INSERT subscription (hook handles it)
  * • Polling backup every 30s
  * • Unread count badge + "Mark all read"
+ * • Per-row delete ("🗑") + "Clear all" — server-backed, optimistic UI
  * • Per-event icons/colours (registration, profile, documents, payments,
  *   appointments, matches, reminders)
+ * • "View all" links to the dedicated /customer/notifications page
  */
 
 import { useMemo } from 'react';
-import { Bell, BellRing, CheckCheck, Loader2, Radio } from 'lucide-react';
+import Link from 'next/link';
+import { Bell, BellRing, CheckCheck, Loader2, Radio, Trash2 } from 'lucide-react';
 import {
   NOTIFICATION_UI,
   parseNotificationPayload,
@@ -49,7 +52,15 @@ function timeAgo(ts: number): string {
   return new Date(ts).toLocaleDateString();
 }
 
-function renderRow(item: RealtimeNotification, onMarkOne: (id: string) => void) {
+export function NotificationRow({
+  item,
+  onMarkOne,
+  onDelete,
+}: {
+  item: RealtimeNotification;
+  onMarkOne: (id: string) => void;
+  onDelete?: (id: string) => void;
+}) {
   const payload = parseNotificationPayload(item.payload);
   const meta = NOTIFICATION_UI[item.type] || NOTIFICATION_UI.generic;
   const title = (payload.title as string) || meta.title;
@@ -64,9 +75,8 @@ function renderRow(item: RealtimeNotification, onMarkOne: (id: string) => void) 
 
   return (
     <li
-      key={item.id}
       onClick={() => !read && onMarkOne(item.id)}
-      className={`flex cursor-pointer items-start gap-3 rounded-2xl border p-3 transition ${
+      className={`flex items-start gap-3 rounded-2xl border p-3 transition ${
         read
           ? 'border-transparent bg-[#fffaf3] opacity-80'
           : 'border-[#f2d9a8] bg-white shadow-sm hover:bg-[#fff7ee]'
@@ -91,6 +101,20 @@ function renderRow(item: RealtimeNotification, onMarkOne: (id: string) => void) 
           {timeAgo(item.at)}
         </span>
       </span>
+      {onDelete && (
+        <button
+          type="button"
+          aria-label="Delete notification"
+          title="Delete"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(item.id);
+          }}
+          className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[#b08a96] transition hover:bg-[#fdeaea] hover:text-[#9b1f2f]"
+        >
+          <Trash2 size={14} />
+        </button>
+      )}
     </li>
   );
 }
@@ -104,15 +128,15 @@ export default function NotificationsPanel({
   initialNotifications?: RealtimeNotification[];
   maxVisible?: number;
 }) {
-  const { notifications, unreadCount, loading, connected, refresh, markRead } = useRealtimeNotifications({
-    userId,
-    pollingMs: 30_000,
-  });
+  const { notifications, unreadCount, loading, connected, refresh, markRead, deleteNotification, deleteAll } =
+    useRealtimeNotifications({ userId, pollingMs: 30_000 });
 
   const items = useMemo(() => {
     const base = notifications.length > 0 ? notifications : initialNotifications;
     return base.slice(0, maxVisible);
   }, [notifications, initialNotifications, maxVisible]);
+
+  const total = notifications.length > 0 ? notifications.length : initialNotifications.length;
 
   return (
     <div id="notifications" className="rounded-[28px] border border-[#f2d9a8] bg-white p-5 shadow-soft">
@@ -145,6 +169,16 @@ export default function NotificationsPanel({
               <CheckCheck size={12} /> Mark all read
             </button>
           )}
+          {total > 0 && (
+            <button
+              onClick={() => {
+                if (window.confirm('Delete ALL notifications? This cannot be undone.')) void deleteAll();
+              }}
+              className="inline-flex items-center gap-1 rounded-full border border-[#e5c4c4] bg-white px-3 py-1 text-[11px] font-bold text-[#9b1f2f] transition hover:bg-[#fdeaea]"
+            >
+              <Trash2 size={12} /> Clear all
+            </button>
+          )}
           <button
             onClick={() => void refresh()}
             className="rounded-full bg-[#fffaf3] px-3 py-1 text-[11px] font-bold text-[#5a3743] transition hover:bg-[#fdf3dd]"
@@ -160,13 +194,25 @@ export default function NotificationsPanel({
             No notifications yet — you will see updates here the moment they happen.
           </li>
         ) : (
-          items.map((item) => renderRow(item, (id) => void markRead(id)))
+          items.map((item) => (
+            <NotificationRow
+              key={item.id}
+              item={item}
+              onMarkOne={(id) => void markRead(id)}
+              onDelete={(id) => void deleteNotification(id)}
+            />
+          ))
         )}
       </ul>
 
       {items.length > 0 && (
-        <div className="mt-3 text-center text-[10px] font-semibold uppercase tracking-wider text-[#b08a96]">
-          Showing latest {items.length} • click a notification to mark it read
+        <div className="mt-3 flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-wider text-[#b08a96]">
+          <span>Showing latest {items.length} • click a notification to mark it read</span>
+          {total > maxVisible && (
+            <Link href="/customer/notifications" className="text-[#7b102d] underline-offset-2 hover:underline">
+              View all ({total}) →
+            </Link>
+          )}
         </div>
       )}
     </div>

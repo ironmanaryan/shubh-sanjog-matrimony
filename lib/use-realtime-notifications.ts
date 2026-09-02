@@ -9,8 +9,10 @@
  *  2. Poll `GET /api/notifications` every 30s as a safety net (realtime drop,
  *     server restarts, pg_cron inserts landing before the channel re-attaches).
  *  3. Expose `markRead(id?)` → POST /api/notifications/read.
+ *  4. Expose `deleteNotification(id)` / `deleteAll()` → DELETE /api/notifications
+ *     (optimistic — the row disappears immediately, server reconciles).
  *
- * Returns { notifications, unreadCount, loading, error, connected, refresh, markRead }.
+ * Returns { notifications, unreadCount, loading, error, connected, refresh, markRead, deleteNotification, deleteAll }.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -298,8 +300,38 @@ export function useRealtimeNotifications(
     }
   }, []);
 
+  // ── Delete one (optimistic, server reconciles) ────────────────────────────
+  const deleteNotification = useCallback(async (id: string) => {
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await resolveAuthHeaders()) };
+      await fetch('/api/notifications', {
+        method: 'DELETE',
+        headers,
+        body: JSON.stringify({ id }),
+      });
+    } catch {
+      // best-effort; the next poll reconciles
+    }
+  }, []);
+
+  // ── Delete all (optimistic, server reconciles) ────────────────────────────
+  const deleteAll = useCallback(async () => {
+    setNotifications([]);
+    try {
+      const headers = { 'Content-Type': 'application/json', ...(await resolveAuthHeaders()) };
+      await fetch('/api/notifications', {
+        method: 'DELETE',
+        headers,
+        body: JSON.stringify({ all: true }),
+      });
+    } catch {
+      // best-effort; the next poll reconciles
+    }
+  }, []);
+
   // ── Derived unread count ──────────────────────────────────────────────────
   const unreadCount = notifications.filter((n) => !(n.readAt ?? n.read_at)).length;
 
-  return { notifications, unreadCount, loading, error, connected, refresh, markRead };
+  return { notifications, unreadCount, loading, error, connected, refresh, markRead, deleteNotification, deleteAll };
 }

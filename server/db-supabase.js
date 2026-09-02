@@ -844,6 +844,18 @@ async function markNotificationsReadDb(_ignored, userId, id = null) {
   return (data || []).length;
 }
 
+// Delete one notification (id) or ALL (id === null) for a user.
+// Returns the number of rows removed — 0 is fine (already gone / not owned).
+async function deleteNotificationsDb(_ignored, userId, id = null) {
+  const client = getClient();
+  if (!client) return 0;
+  let query = client.from(TABLES.notifications).delete().eq('to_user_id', userId);
+  if (id) query = query.eq('id', id);
+  const { data, error } = await query.select('id');
+  if (error) throw error;
+  return (data || []).length;
+}
+
 // --- internal notes ---
 async function saveInternalNoteDb(_ignored, note) {
   const client = getClient();
@@ -1121,6 +1133,7 @@ module.exports = {
   saveNotificationDb,
   getNotificationsDb,
   markNotificationsReadDb,
+  deleteNotificationsDb,
   saveInternalNoteDb,
   listInternalNotesDb,
   saveInquiryDb,

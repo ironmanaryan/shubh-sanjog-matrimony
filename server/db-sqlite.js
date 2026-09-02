@@ -810,6 +810,16 @@ async function markNotificationsReadDb(db, userId, id = null) {
   return 0; // SQLite dev fallback — count is not critical here
 }
 
+// Delete one notification (id) or ALL (id === null) for a user.
+async function deleteNotificationsDb(db, userId, id = null) {
+  if (id) {
+    await db.run(`DELETE FROM notifications WHERE toUserId = ? AND id = ?`, [userId, id]);
+  } else {
+    await db.run(`DELETE FROM notifications WHERE toUserId = ?`, [userId]);
+  }
+  return 0; // SQLite dev fallback — count is not critical here
+}
+
 // --- Admin internal notes (scope PDF §31) ------------------------------------
 async function saveInternalNoteDb(db, note) {
   await db.run(
@@ -1056,4 +1066,4 @@ async function saveNotificationDb(db, notification) {
   );
 }
 
-module.exports = { init, hydrateStore, createUser, getUserByIdentifier, getUserById, backfillUserEmail, upsertProfile, getProfile, mapProfileRow, listMembershipPlansDb, getPlanDb, setProfileReview, submitProfileForReviewDb, listProfilesByStatusDb, saveMatchAssignmentDb, listMatchAssignmentsDb, savePrivacyDb, upsertPrivacyOnly, savePayment, setPaymentStatus, getPaymentById, listPayments, listPaymentsByUserDb, saveInterestRequest, updateInterestRequestDb, saveMembershipDb, saveDocument, listDocuments, saveAppointment, listAppointments, setDocumentStatus, deleteDocument, toggleShortlistDb, getShortlistDb, addInterestDb, getNotificationsDb, markNotificationsReadDb, saveNotificationDb, saveInternalNoteDb, listInternalNotesDb, saveInquiryDb, listInquiriesDb, getInquiryByIdDb, setInquiryStatusDb, mapInquiryRow, saveAuditLogDb, listAuditLogsDb, setTokenRevocationDb, anonymizeAndPurgeUser, deleteUserCascade, setUserRole, listUsers, setAppointmentStatusDb, saveOtp, latestActiveOtp, countRecentOtps, incrementOtpAttempts, consumeOtp };
+module.exports = { init, hydrateStore, createUser, getUserByIdentifier, getUserById, backfillUserEmail, upsertProfile, getProfile, mapProfileRow, listMembershipPlansDb, getPlanDb, setProfileReview, submitProfileForReviewDb, listProfilesByStatusDb, saveMatchAssignmentDb, listMatchAssignmentsDb, savePrivacyDb, upsertPrivacyOnly, savePayment, setPaymentStatus, getPaymentById, listPayments, listPaymentsByUserDb, saveInterestRequest, updateInterestRequestDb, saveMembershipDb, saveDocument, listDocuments, saveAppointment, listAppointments, setDocumentStatus, deleteDocument, toggleShortlistDb, getShortlistDb, addInterestDb, getNotificationsDb, markNotificationsReadDb, deleteNotificationsDb, saveNotificationDb, saveInternalNoteDb, listInternalNotesDb, saveInquiryDb, listInquiriesDb, getInquiryByIdDb, setInquiryStatusDb, mapInquiryRow, saveAuditLogDb, listAuditLogsDb, setTokenRevocationDb, anonymizeAndPurgeUser, deleteUserCascade, setUserRole, listUsers, setAppointmentStatusDb, saveOtp, latestActiveOtp, countRecentOtps, incrementOtpAttempts, consumeOtp };

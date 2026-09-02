@@ -63,7 +63,7 @@ const navItems = [
   { label: 'Membership', icon: Wallet, href: '/customer/membership' },
   { label: 'Payments', icon: CreditCard, href: '/customer/membership' },
   { label: 'Appointments', icon: BriefcaseBusiness, href: '/customer/appointments' },
-  { label: 'Notifications', icon: Bell, href: '#notifications' },
+  { label: 'Notifications', icon: Bell, href: '/customer/notifications' },
   { label: 'Profile Activity', icon: MessageSquare, href: '/customer/activity' },
   { label: 'Account Settings', icon: ShieldCheck, href: '/customer/settings' },
 ];
