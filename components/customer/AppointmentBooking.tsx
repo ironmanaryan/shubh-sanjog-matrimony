@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { API } from '@/lib/api-base';
 import RequestMeetingButton from '@/components/customer/RequestMeetingButton';
 import { buildMeetingRequestMessage } from '@/lib/whatsapp';
 import { getSession } from '@/lib/auth-client';
+import { getSupabase } from '@/lib/supabase';
 
 
 type SlotDay = {
@@ -36,6 +37,67 @@ export default function AppointmentBooking() {
   const [message, setMessage] = useState('');
   const [memberName, setMemberName] = useState('');
 
+  // ── fetchMyAppointments ──────────────────────────────────────────────
+  // Direct Supabase SELECT — the same strict pattern used by
+  // /customer/documents. Auth user is resolved explicitly, the SELECT
+  // filters by the exact UUID, and errors are logged but never wipe the
+  // existing list (a transient network blip shouldn't blank the UI).
+  const fetchMyAppointments = useCallback(async () => {
+    const supabase = getSupabase();
+    if (!supabase) {
+      // Fall back to the Express API if Supabase isn't configured in this
+      // browser session (rare, but covers dev/preview environments).
+      const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+      if (!token) return;
+      try {
+        const res = await fetch(`${API}/appointments/my`, { headers: { Authorization: `Bearer ${token}` } });
+        if (res.ok) {
+          const json = await res.json();
+          setBookings(json.appointments || []);
+        }
+      } catch (err) {
+        console.error('fetchMyAppointments (API fallback) failed:', err);
+      }
+      return;
+    }
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const userId = (user.id || '').trim();
+      if (!userId || /^undefined$/i.test(userId) || /^null$/i.test(userId)) return;
+
+      const { data: rows, error } = await supabase
+        .from('appointments')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('fetchMyAppointments Supabase error:', error);
+        return; // keep previous state — never blank on transient error
+      }
+      if (!Array.isArray(rows)) return;
+
+      const mapped: Booking[] = rows.map((r: any) => ({
+        id: String(r.id),
+        date: String(r.date || ''),
+        time: String(r.time || ''),
+        type: String(r.type || 'Consultation'),
+        notes: String(r.notes || ''),
+        status: String(r.status || 'Booked'),
+        feedback: r.feedback || null,
+        completedAt: r.completed_at || null,
+      }));
+      setBookings(mapped);
+    } catch (err) {
+      console.error('fetchMyAppointments error:', err);
+    }
+  }, []);
+
+  // ── loadData ──────────────────────────────────────────────────────────
+  // Slots come from the Express API (they are generated server-side with
+  // double-booking awareness). My appointments come from Supabase directly.
   const loadData = async () => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
     if (!token) {
@@ -46,11 +108,7 @@ export default function AppointmentBooking() {
     }
 
     try {
-      const [slotsRes, myRes] = await Promise.all([
-        fetch(`${API}/appointments/slots`, { headers: { Authorization: `Bearer ${token}` } }),
-        fetch(`${API}/appointments/my`, { headers: { Authorization: `Bearer ${token}` } }),
-      ]);
-
+      const slotsRes = await fetch(`${API}/appointments/slots`, { headers: { Authorization: `Bearer ${token}` } });
       if (slotsRes.ok) {
         const slotsJson = await slotsRes.json();
         setDays(slotsJson.slots || []);
@@ -58,11 +116,8 @@ export default function AppointmentBooking() {
         setSelectedDate(firstAvailable?.date || '');
         setSelectedSlot(firstAvailable?.slots.find((slot: { available: boolean }) => slot.available)?.id || '');
       }
-
-      if (myRes.ok) {
-        const myJson = await myRes.json();
-        setBookings(myJson.appointments || []);
-      }
+      // Fetch appointments directly from Supabase
+      await fetchMyAppointments();
     } catch (err) {
       console.error('load appointment data', err);
     } finally {
@@ -72,6 +127,7 @@ export default function AppointmentBooking() {
 
   useEffect(() => {
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // PRD #2: personalise the WhatsApp meeting request with the member's name.
@@ -93,7 +149,19 @@ export default function AppointmentBooking() {
     [memberName, selectedDate, selectedSlotTime, bookingType, notes]
   );
 
+  // ── handleBook ────────────────────────────────────────────────────────
+  // STRICT INSERT directly into Supabase `appointments` table — same
+  // pattern as /customer/documents:
+  //   1. Resolve auth user explicitly via supabase.auth.getUser()
+  //   2. INSERT with .select() and check error
+  //   3. On error: console.error + alert + return (no optimistic push)
+  //   4. On success: call fetchMyAppointments() to pull canonical rows
+  //
+  // The Express API POST /api/appointments/book is kept as a FALLBACK
+  // only when Supabase is unreachable from the browser — it handles
+  // membership gating + profile-status guard + notification dispatch.
   const handleBook = async () => {
+    const supabase = getSupabase();
     const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
     if (!token) {
       setMessage('Please log in first.');
@@ -105,19 +173,86 @@ export default function AppointmentBooking() {
     }
 
     setSaving(true);
+    setMessage('');
+
+    const slot = selectedDaySlots.find((item) => item.id === selectedSlot);
+    const slotTime = slot?.time || selectedSlot;
+
+    // ── PRIMARY: direct Supabase INSERT ──
+    if (supabase) {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) {
+          setMessage('Please log in first.');
+          return;
+        }
+        const userId = (user.id || '').trim();
+        if (!userId || /^undefined$/i.test(userId) || /^null$/i.test(userId)) {
+          setMessage('Could not resolve your account. Please refresh and try again.');
+          return;
+        }
+
+        const appointmentId =
+          typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+            ? crypto.randomUUID()
+            : `apt-${userId}-${Date.now()}`;
+
+        const now = Date.now();
+        const insertPayload = {
+          id: appointmentId,
+          user_id: userId,
+          date: selectedDate,
+          time: slotTime,
+          type: bookingType,
+          notes: notes || '',
+          status: 'Booked',
+          feedback: null,
+          completed_at: null,
+          created_at: now,
+        };
+
+        const { error } = await supabase
+          .from('appointments')
+          .insert(insertPayload)
+          .select();
+
+        if (error) {
+          console.error('Appointment Insert Error:', error);
+          // If the error is an RLS / FK issue, fall back to the Express API
+          // which handles profile upsert + membership gating server-side.
+          if (error.code === '23503' || error.code === '42501' || /foreign key|policy/i.test(error.message)) {
+            console.warn('Supabase insert blocked, falling back to Express API:', error.message);
+          } else {
+            setMessage(`Booking failed: ${error.message}`);
+            setSaving(false);
+            return;
+          }
+        } else {
+          // Success — refetch canonical rows from Supabase
+          setMessage('Appointment booked successfully.');
+          setNotes('');
+          await fetchMyAppointments();
+          setSaving(false);
+          return;
+        }
+      } catch (directErr: any) {
+        console.error('Supabase direct booking failed, falling back to Express API:', directErr);
+      }
+    }
+
+    // ── FALLBACK: Express API (handles membership gate + profile guard) ──
     try {
-      const slot = selectedDaySlots.find((item) => item.id === selectedSlot);
       const res = await fetch(`${API}/appointments/book`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ date: selectedDate, time: slot?.time || selectedSlot, type: bookingType, notes }),
+        body: JSON.stringify({ date: selectedDate, time: slotTime, type: bookingType, notes }),
       });
 
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Booking failed');
       setMessage('Appointment booked successfully.');
       setNotes('');
-      await loadData();
+      await fetchMyAppointments();
     } catch (err: any) {
       setMessage(err.message || 'Booking failed');
     } finally {
@@ -131,6 +266,27 @@ export default function AppointmentBooking() {
   // to the customer and the admin should be the one to close it out.
   async function cancelBooking(id: string) {
     if (typeof window !== 'undefined' && !window.confirm('Cancel this appointment?')) return;
+
+    // PRIMARY: direct Supabase UPDATE
+    const supabase = getSupabase();
+    if (supabase) {
+      try {
+        const { error } = await supabase
+          .from('appointments')
+          .update({ status: 'Cancelled', feedback: notes || null })
+          .eq('id', id);
+        if (!error) {
+          setMessage('Appointment cancelled.');
+          await fetchMyAppointments();
+          return;
+        }
+        console.warn('Supabase cancel failed, falling back to API:', error);
+      } catch (directErr) {
+        console.warn('Supabase direct cancel failed, falling back to API:', directErr);
+      }
+    }
+
+    // FALLBACK: Express API
     const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
     if (!token) {
       setMessage('Please log in first.');
@@ -145,7 +301,7 @@ export default function AppointmentBooking() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || 'Cancellation failed');
       setMessage('Appointment cancelled.');
-      await loadData();
+      await fetchMyAppointments();
     } catch (err: any) {
       setMessage(err.message || 'Cancellation failed');
     }

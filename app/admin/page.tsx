@@ -261,18 +261,20 @@ type DocRow = {
   uploadedAt: number;
 };
 
-// §22 — one row from GET /api/admin/appointments.
+// §22 — one row from GET /api/admin/appointments or direct Supabase SELECT.
 type AppointmentRow = {
   id: string;
   userId: string;
   customerName: string;
   customerIdentifier: string;
+  customerEmail?: string;
   date: string;
   time: string;
   type: string;
   notes?: string | null;
   status: string;
   feedback?: string | null;
+  meetingLink?: string | null;
   completedAt?: number | null;
   createdAt?: number | null;
 };
@@ -686,9 +688,79 @@ export default function AdminPage() {
           if (res.ok) setPayments(json.payments || []);
         }
         if (key === 'appointments') {
-          const res = await fetch(`${API}/admin/appointments`, { headers: authHeaders() });
-          const json = await res.json();
-          if (res.ok) setAllAppointments(json.appointments || []);
+          // PRIMARY: direct Supabase SELECT from the `appointments` table.
+          // Same pattern as the documents tab — the browser-side admin JWT
+          // reads the table directly so rows land in the queue even when the
+          // Express API is briefly unreachable. Ordered by created_at desc
+          // so the newest bookings appear at the top.
+          const supabase = getSupabase();
+          let directCount = 0;
+          if (supabase) {
+            try {
+              const { data: rows, error } = await supabase
+                .from('appointments')
+                .select('*')
+                .order('created_at', { ascending: false })
+                .limit(500);
+              if (!error && Array.isArray(rows)) {
+                // Hydrate each row with customer name + email from the
+                // `profiles` table (joined manually since Supabase RLS
+                // doesn't expose cross-table selects for every role).
+                const userIds = [...new Set(rows.map((r: any) => String(r.user_id || '')).filter(Boolean))];
+                const profileMap: Record<string, { name: string; email: string }> = {};
+                if (userIds.length > 0) {
+                  const { data: profiles } = await supabase
+                    .from('profiles')
+                    .select('id, email, full_name')
+                    .in('id', userIds);
+                  if (Array.isArray(profiles)) {
+                    for (const p of profiles) {
+                      profileMap[String(p.id)] = {
+                        name: String(p.full_name || p.email || p.id),
+                        email: String(p.email || ''),
+                      };
+                    }
+                  }
+                }
+                const adapted: AppointmentRow[] = rows.map((r: any) => {
+                  const profile = profileMap[String(r.user_id || '')] || { name: '', email: '' };
+                  return {
+                    id: String(r.id),
+                    userId: String(r.user_id || ''),
+                    customerName: profile.name || String(r.user_id || '').slice(0, 12),
+                    customerIdentifier: profile.email || '',
+                    customerEmail: profile.email || '',
+                    date: String(r.date || ''),
+                    time: String(r.time || ''),
+                    type: String(r.type || 'Consultation'),
+                    notes: r.notes || null,
+                    status: String(r.status || 'Booked'),
+                    feedback: r.feedback || null,
+                    meetingLink: r.meeting_link || null,
+                    completedAt: r.completed_at || null,
+                    createdAt: r.created_at || null,
+                  };
+                });
+                setAllAppointments(adapted);
+                directCount = adapted.length;
+              }
+            } catch (directErr) {
+              console.warn('admin appointments direct SELECT failed:', directErr);
+            }
+          }
+
+          // SECONDARY fallback: if Supabase returned nothing (network down
+          // or admin not authed in browser), try the server route.
+          if (directCount === 0) {
+            try {
+              const res = await fetch(`${API}/admin/appointments`, { headers: authHeaders() });
+              const json = await res.json();
+              if (res.ok) setAllAppointments(json.appointments || []);
+            } catch (serverErr) {
+              console.warn('admin appointments server fallback failed:', serverErr);
+              setAllAppointments([]);
+            }
+          }
         }
         if (key === 'overview' && perms.manageTeam) {
           const res = await fetch(`${API}/admin/team`, { headers: authHeaders() });
@@ -1442,7 +1514,7 @@ export default function AdminPage() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-xl font-black">Appointment Management</h2>
-                <p className="text-sm text-[#5a3743]">Confirm completions, record outcomes, and resolve cancellations.</p>
+                <p className="text-sm text-[#5a3743]">Confirm completions, record outcomes, and resolve cancellations. Appointments are fetched live from the Supabase <code className="rounded bg-[#fff9ef] px-1 text-[#7b102d]">appointments</code> table.</p>
               </div>
               <div className="flex gap-2">
                 {(['All', 'Booked', 'Completed', 'Cancelled'] as const).map((value) => (
@@ -1474,16 +1546,24 @@ export default function AdminPage() {
                         : row.status === 'Cancelled'
                         ? 'bg-rose-100 text-rose-700'
                         : 'bg-[#fff0cf] text-[#8a5a11]';
-                    const canComplete = row.status === 'Booked';
+                    const canAct = row.status === 'Booked';
                     return (
                       <div key={row.id} className="rounded-2xl border border-[#f2d9a8] bg-white p-4 shadow-soft">
                         <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div>
+                          <div className="space-y-1">
                             <div className="text-base font-black text-[#2c0d16]">
                               {row.customerName}
-                              {row.customerIdentifier ? <span className="ml-2 text-xs font-normal text-[#6a4a57]">({row.customerIdentifier})</span> : null}
                             </div>
-                            <div className="mt-1 text-sm text-[#5a3743]">{row.type || 'Consultation'} • {row.date} • {row.time}</div>
+                            {row.customerEmail ? (
+                              <div className="text-xs font-medium text-[#6a4a57]">{row.customerEmail}</div>
+                            ) : row.customerIdentifier ? (
+                              <div className="text-xs font-medium text-[#6a4a57]">{row.customerIdentifier}</div>
+                            ) : null}
+                            <div className="mt-1 text-sm text-[#5a3743]">
+                              <span className="font-semibold">{row.type || 'Consultation'}</span>
+                              {' • '}
+                              {row.date} • {row.time}
+                            </div>
                             {row.notes ? <div className="mt-1 text-xs text-[#6a4a57]">Customer note: {row.notes}</div> : null}
                             {row.feedback ? <div className="mt-1 text-xs italic text-[#0a7d4c]">Previous feedback: {row.feedback}</div> : null}
                             {row.completedAt ? <div className="mt-1 text-[10px] uppercase tracking-wide text-[#6a4a57]">Completed {new Date(row.completedAt).toLocaleString()}</div> : null}
@@ -1493,20 +1573,36 @@ export default function AdminPage() {
 
                         {perms.reviewProfiles && (
                           <div className="mt-3 space-y-3 border-t border-[#f2d9a8] pt-3">
-                            <label className="block text-xs font-bold uppercase tracking-wide text-[#5a3743]">Outcome / feedback note</label>
-                            <textarea
-                              value={appointmentFeedbackDrafts[row.id] ?? row.feedback ?? ''}
-                              onChange={(e) =>
-                                setAppointmentFeedbackDrafts((prev) => ({ ...prev, [row.id]: e.target.value }))
-                              }
-                              placeholder="Notes the team should remember from this meeting…"
-                              rows={2}
-                              className="w-full rounded-xl border border-[#f2d9a8] bg-[#fffaf3] px-3 py-2 text-sm"
-                            />
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <div>
+                                <label className="block text-xs font-bold uppercase tracking-wide text-[#5a3743]">Meeting link / notes</label>
+                                <input
+                                  type="text"
+                                  value={appointmentFeedbackDrafts[`${row.id}-link`] ?? row.meetingLink ?? ''}
+                                  onChange={(e) =>
+                                    setAppointmentFeedbackDrafts((prev) => ({ ...prev, [`${row.id}-link`]: e.target.value }))
+                                  }
+                                  placeholder="https://meet.google.com/xxx or room name"
+                                  className="mt-1 w-full rounded-xl border border-[#f2d9a8] bg-[#fffaf3] px-3 py-2 text-sm"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-xs font-bold uppercase tracking-wide text-[#5a3743]">Outcome / feedback note</label>
+                                <textarea
+                                  value={appointmentFeedbackDrafts[row.id] ?? row.feedback ?? ''}
+                                  onChange={(e) =>
+                                    setAppointmentFeedbackDrafts((prev) => ({ ...prev, [row.id]: e.target.value }))
+                                  }
+                                  placeholder="Notes the team should remember from this meeting…"
+                                  rows={2}
+                                  className="mt-1 w-full rounded-xl border border-[#f2d9a8] bg-[#fffaf3] px-3 py-2 text-sm"
+                                />
+                              </div>
+                            </div>
                             <div className="flex flex-wrap gap-2">
                               <button
-                                disabled={busy || !canComplete}
-                                title={canComplete ? 'Mark this meeting as completed' : `Already ${row.status.toLowerCase()}`}
+                                disabled={busy || !canAct}
+                                title={canAct ? 'Mark this meeting as completed' : `Already ${row.status.toLowerCase()}`}
                                 onClick={() =>
                                   act(
                                     () =>
@@ -1524,10 +1620,10 @@ export default function AdminPage() {
                                 }
                                 className="rounded-full bg-emerald-600 px-4 py-1.5 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-50"
                               >
-                                Mark completed
+                                Complete
                               </button>
                               <button
-                                disabled={busy || !canComplete}
+                                disabled={busy}
                                 onClick={() =>
                                   act(
                                     () =>
@@ -1540,12 +1636,12 @@ export default function AdminPage() {
                                           feedback: appointmentFeedbackDrafts[row.id] ?? row.feedback ?? '',
                                         }),
                                       }),
-                                    'Feedback recorded; meeting closed.'
+                                    'Meeting notes saved.'
                                   )
                                 }
                                 className="rounded-full border border-[#7b102d] bg-white px-4 py-1.5 text-xs font-bold text-[#7b102d] disabled:opacity-50"
                               >
-                                Save feedback
+                                Add meeting notes
                               </button>
                               <button
                                 disabled={busy || row.status === 'Cancelled'}
@@ -1566,7 +1662,7 @@ export default function AdminPage() {
                                 }
                                 className="rounded-full bg-rose-600 px-4 py-1.5 text-xs font-bold text-white disabled:opacity-50"
                               >
-                                Cancel meeting
+                                Cancel
                               </button>
                             </div>
                           </div>
